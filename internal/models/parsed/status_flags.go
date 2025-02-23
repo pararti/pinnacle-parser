@@ -1,0 +1,8 @@
+package parsed
+
+const (
+	STATUS_NOT_CHANGE = iota
+	STATUS_CREATED
+	STATUS_UPDATED
+	STATUS_DELETED
+)
