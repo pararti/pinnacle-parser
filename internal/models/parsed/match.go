@@ -254,3 +254,103 @@ func GenerateExampleMatch() *Match {
 
 	return match
 }
+
+// GenerateRandomMatchDelta creates random changes for an existing match
+func GenerateRandomMatchDelta(match *Match) *Match {
+	// Create a copy of the match to modify
+	delta := &Match{
+		ID:           match.ID,
+		ParentId:     match.ParentId,
+		BestOfX:      match.BestOfX,
+		IsLive:       match.IsLive,
+		League:       &League{ID: match.League.ID, Sport: &Sport{ID: match.League.Sport.ID}},
+		Participants: make([]*Participant, len(match.Participants)),
+		StartTime:    match.StartTime,
+		StatusFlag:   STATUS_UPDATED,
+	}
+
+	// 30% chance to change BestOfX
+	if rand.Float32() < 0.3 {
+		newBestOfX := []int{1, 2, 3, 5}[rand.Intn(4)]
+		if newBestOfX != match.BestOfX {
+			delta.BestOfX = newBestOfX
+			delta.MarkChanged("bestOfX")
+		}
+	}
+
+	// 20% chance to change IsLive
+	if rand.Float32() < 0.2 {
+		delta.IsLive = !match.IsLive
+		delta.MarkChanged("isLive")
+	}
+
+	// 25% chance to change start time
+	if rand.Float32() < 0.25 {
+		delta.StartTime = match.StartTime.Add(time.Duration(rand.Intn(48)-24) * time.Hour)
+		delta.MarkChanged("startTime")
+	}
+
+	// League changes (40% chance for any league change)
+	if rand.Float32() < 0.4 {
+		delta.League = &League{
+			ID:    match.League.ID,
+			Sport: &Sport{ID: match.League.Sport.ID},
+		}
+		delta.MarkChanged("league")
+
+		// 20% chance to change group
+		if rand.Float32() < 0.2 {
+			delta.League.Group = "Group " + string(rune('A'+rand.Intn(4)))
+			delta.League.MarkChanged("group")
+		}
+
+		// 15% chance to change hidden status
+		if rand.Float32() < 0.15 {
+			delta.League.IsHidden = !match.League.IsHidden
+			delta.League.MarkChanged("isHidden")
+		}
+
+		// 15% chance to change promoted status
+		if rand.Float32() < 0.15 {
+			delta.League.IsPromoted = !match.League.IsPromoted
+			delta.League.MarkChanged("isPromoted")
+		}
+
+		// 15% chance to change sticky status
+		if rand.Float32() < 0.15 {
+			delta.League.IsSticky = !match.League.IsSticky
+			delta.League.MarkChanged("isSticky")
+		}
+
+		// 10% chance to change sequence
+		if rand.Float32() < 0.1 {
+			delta.League.Sequence = rand.Intn(100)
+			delta.League.MarkChanged("sequence")
+		}
+
+		// 5% chance to change sport name (very rare)
+		if rand.Float32() < 0.05 {
+			delta.League.Sport.Name = exampleSports[rand.Intn(len(exampleSports))].name
+			delta.League.Sport.MarkChanged("name")
+			delta.League.MarkChanged("sport")
+		}
+	}
+
+	// Participant changes (35% chance for any participant change)
+	if rand.Float32() < 0.35 {
+		delta.MarkChanged("participants")
+		for i := range match.Participants {
+			delta.Participants[i] = &Participant{}
+			// 20% chance to change team name
+			if rand.Float32() < 0.2 {
+				newTeam := exampleTeams[rand.Intn(len(exampleTeams))]
+				if newTeam != match.Participants[i].Name {
+					delta.Participants[i].Name = newTeam
+					delta.Participants[i].MarkChanged("name")
+				}
+			}
+		}
+	}
+
+	return delta
+}
