@@ -1,8 +1,30 @@
 package parsed
 
 import (
+	"math/rand"
 	"time"
 )
+
+// Example sport names and their IDs
+var exampleSports = []struct {
+	id   int
+	name string
+}{
+	{1, "Soccer"},
+	{2, "Basketball"},
+	{3, "Tennis"},
+	{4, "Hockey"},
+	{5, "Baseball"},
+	{6, "Volleyball"},
+	{7, "eSports"},
+}
+
+// Example team names for generating random participants
+var exampleTeams = []string{
+	"Red Dragons", "Blue Eagles", "Green Lions", "Black Knights",
+	"White Tigers", "Golden Hawks", "Silver Wolves", "Purple Phoenix",
+	"Royal Guards", "Elite Warriors", "Storm Riders", "Thunder Kings",
+}
 
 type Sport struct {
 	ID      int             `json:"id,omitempty"`
@@ -176,4 +198,59 @@ func (m *Match) GetUpdate() *Match {
 	}
 
 	return upd
+}
+
+// GenerateExampleMatch creates a new Match instance with random example data
+func GenerateExampleMatch() *Match {
+	// Generate random sport
+	sportIdx := rand.Intn(len(exampleSports))
+	sport := &Sport{
+		ID:   exampleSports[sportIdx].id,
+		Name: exampleSports[sportIdx].name,
+	}
+
+	// Generate random league
+	league := &League{
+		ID:         rand.Intn(1000) + 1,
+		Name:       sport.Name + " League " + string(rune('A'+rand.Intn(3))),
+		Group:      "Group " + string(rune('A'+rand.Intn(4))),
+		IsHidden:   rand.Float32() < 0.1,  // 10% chance of being hidden
+		IsPromoted: rand.Float32() < 0.2,  // 20% chance of being promoted
+		IsSticky:   rand.Float32() < 0.15, // 15% chance of being sticky
+		Sequence:   rand.Intn(100),
+		Sport:      sport,
+	}
+
+	// Generate 2 random participants
+	usedIndices := make(map[int]bool)
+	participants := make([]*Participant, 2)
+	for i := 0; i < 2; i++ {
+		var teamIdx int
+		for {
+			teamIdx = rand.Intn(len(exampleTeams))
+			if !usedIndices[teamIdx] {
+				usedIndices[teamIdx] = true
+				break
+			}
+		}
+		participants[i] = &Participant{
+			Name:      exampleTeams[teamIdx],
+			Alignment: []string{"home", "away"}[i],
+		}
+	}
+
+	// Generate match
+	match := &Match{
+		ID:           rand.Intn(100000) + 1,
+		BestOfX:      []int{1, 2, 3, 5}[rand.Intn(4)],
+		IsLive:       rand.Float32() < 0.3, // 30% chance of being live
+		League:       league,
+		Participants: participants,
+		StartTime:    time.Now().Add(time.Duration(rand.Intn(168)) * time.Hour), // Random time within next week
+		ParentId:     0,                                                         // Will be set to ID if not specified
+		StatusFlag:   STATUS_CREATED,
+	}
+	match.ParentId = match.ID
+
+	return match
 }
