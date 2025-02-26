@@ -17,6 +17,7 @@ type TestMode struct {
 	logger     *logger.Logger
 	sender     abstruct.Sender
 	matches    map[int]*parsed.Match
+	bets       map[int]map[string]*parsed.Straight // Add bets map
 	stopChan   chan struct{}
 	isRunning  bool
 	matchCount int
@@ -27,6 +28,7 @@ func NewTestMode(l *logger.Logger, s abstruct.Sender) *TestMode {
 		logger:     l,
 		sender:     s,
 		matches:    make(map[int]*parsed.Match),
+		bets:       make(map[int]map[string]*parsed.Straight), // Initialize bets map
 		stopChan:   make(chan struct{}),
 		matchCount: 0,
 	}
@@ -75,8 +77,31 @@ func (t *TestMode) generateAndSendEvents(topic string) {
 	for i := 0; i < newMatchCount; i++ {
 		match := parsed.GenerateExampleMatch()
 		t.matches[match.ID] = match
+		t.bets[match.ID] = make(map[string]*parsed.Straight) // Initialize bets map for new match
 		newMatches = append(newMatches, match)
 		t.matchCount++
+
+		// Generate 1-3 bets for the new match
+		betCount := rand.Intn(3) + 1
+		newBets := make([]*parsed.Straight, 0, betCount)
+		for j := 0; j < betCount; j++ {
+			bet := parsed.GenerateExampleStraight(match.ID)
+			t.bets[match.ID][bet.Key] = bet
+			newBets = append(newBets, bet)
+		}
+
+		// Send new bets
+		if len(newBets) > 0 {
+			data := kafkadata.Bet{
+				EventType: constants.BET_NEW,
+				Source:    constants.SOURCE,
+				Data:      newBets,
+			}
+			if jsonData, err := json.Marshal(data); err == nil {
+				t.sender.Send(jsonData, &topic)
+				t.logger.Info(fmt.Sprintf("New bets for match %d: %d bets created", match.ID, len(newBets)))
+			}
+		}
 	}
 
 	// Send new matches
@@ -103,21 +128,45 @@ func (t *TestMode) generateAndSendEvents(topic string) {
 
 	// Generate updates for existing matches (30% chance per match)
 	updates := make([]*parsed.Match, 0)
+	allBetUpdates := make([]*parsed.Straight, 0) // Changed to slice
 	deletions := make([]int, 0)
 
 	for id, match := range t.matches {
-		if rand.Float32() < 0.3 { // 30% chance to update
+		if rand.Float32() < 0.3 { // 30% chance to update match
 			delta := parsed.GenerateRandomMatchDelta(match)
 			updates = append(updates, delta)
+		}
+
+		// Update bets for this match (50% chance per bet)
+		for betKey, bet := range t.bets[id] {
+			if rand.Float32() < 0.5 { // 50% chance to update each bet
+				delta := parsed.GenerateRandomStraightDelta(bet)
+				t.bets[id][betKey] = delta // Update the bet in our map
+				allBetUpdates = append(allBetUpdates, delta)
+			}
 		}
 
 		if rand.Float32() < 0.05 { // 5% chance to delete
 			deletions = append(deletions, id)
 			delete(t.matches, id)
+			delete(t.bets, id) // Also delete associated bets
 		}
 	}
 
-	// Send updates
+	// Send bet updates
+	if len(allBetUpdates) > 0 {
+		data := kafkadata.BetUpd{
+			EventType: constants.BET_UPDATE,
+			Source:    constants.SOURCE,
+			Data:      allBetUpdates,
+		}
+		if jsonData, err := json.Marshal(data); err == nil {
+			t.sender.Send(jsonData, &topic)
+			t.logger.Info(fmt.Sprintf("Updated %d bets", len(allBetUpdates)))
+		}
+	}
+
+	// Send match updates
 	if len(updates) > 0 {
 		data := kafkadata.MatchUpd{
 			EventType: constants.MATCH_UPDATE,
