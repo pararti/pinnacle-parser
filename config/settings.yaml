@@ -1,4 +1,4 @@
-testMode: false
+testMode: true
 site: "https://www.pinnacle.com/en/esports/matchups/highlights/"
 cookieDir: "/home/pararti/gog"
 kafkaAddress: "localhost"
