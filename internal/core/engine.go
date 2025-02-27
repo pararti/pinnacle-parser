@@ -19,7 +19,6 @@ import (
 const matchSuffix = "related"
 const straightSuffix = "straight"
 const maxTime = 1<<63 - 1 //290 years
-const betBatchSize = 8
 
 type Engine struct {
 	logger    *logger.Logger
@@ -62,6 +61,37 @@ func (e *Engine) Start(appOpts *options.Options) {
 
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
+
+	e.logger.Info("Проверка статуса авторизации...")
+
+	var isAuthenticated bool
+	err := chromedp.Run(ctx,
+		chromedp.Navigate(appOpts.Site),
+		chromedp.Sleep(5*time.Second),
+		chromedp.Evaluate(`
+		(function() {
+			if (document.querySelector('input#password')) {
+				return false;
+			}
+			if (document.querySelector('input#username')) {
+				return false;
+			}
+
+			return true;
+		})()
+	`, &isAuthenticated))
+
+	if err != nil {
+		e.logger.Fatal("Ошибка проверки авторизации:", err)
+	}
+
+	if isAuthenticated {
+		e.logger.Info("Пользователь уже авторизован. Продолжаем работу...")
+	} else {
+		e.logger.Warn("Требуется авторизация")
+		e.logger.Info("Выполняем процесс авторизации...")
+		e.performLogin(ctx, appOpts.Login, appOpts.Password, appOpts.Site)
+	}
 
 	// Enable network events
 	if err := chromedp.Run(ctx, network.Enable()); err != nil {
@@ -114,6 +144,7 @@ func (e *Engine) Start(appOpts *options.Options) {
 	// Navigate to target website and wait for XHR requests
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(appOpts.Site),
+		chromedp.Reload(),
 		chromedp.Sleep(time.Duration(maxTime)),
 	); err != nil {
 		e.logger.Fatal("Navigation error: %v", err)
@@ -143,5 +174,62 @@ func (e *Engine) processBets() {
 				e.Storage.SetBets(batches)
 			}
 		}
+	}
+}
+
+func (e *Engine) performLogin(ctx context.Context, username, password, link string) {
+	err := chromedp.Run(ctx,
+		chromedp.Navigate(link),
+		chromedp.WaitVisible("input#username", chromedp.ByQuery),
+		chromedp.SendKeys("input#username", username, chromedp.ByQuery),
+		chromedp.SendKeys("input#password", password, chromedp.ByQuery),
+		chromedp.Click(`div[data-test-id="header-login-loginButton"] button`, chromedp.ByQuery),
+		chromedp.WaitNotPresent("input#password", chromedp.ByQuery),
+	)
+
+	if err != nil {
+		e.logger.Fatal("Ошибка авторизации: ", err)
+		return
+	}
+
+	e.logger.Info("Успешная авторизация! Ожидаем появления модального окна...")
+
+	modalSelector := `button[data-test-id="Button"][type="button"][class*="button-l9TRHt6rdY fullWidth-RjvaOdiHkK ellipsis medium-sdlPvkH2AX dead-center ghostOnLight-DuD1oNNBJh"]`
+
+	err = chromedp.Run(ctx, chromedp.Sleep(3*time.Second))
+	if err != nil {
+		e.logger.Warn("Ошибка при ожидании: %v", err)
+	}
+
+	err = chromedp.Run(ctx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			e.logger.Error("Пытаемся найти кнопку 'Do it later' с точным селектором")
+			return nil
+		}),
+		chromedp.Click(modalSelector, chromedp.ByQuery, chromedp.NodeVisible),
+	)
+
+	if err != nil {
+		e.logger.Error("Не удалось найти кнопку с точным селектором: %v", err)
+		e.logger.Error("Пробуем альтернативный селектор")
+
+		err = chromedp.Run(ctx,
+			chromedp.Click(`button[data-test-id="Button"]:has(span:contains("Do it later"))`, chromedp.ByQuery, chromedp.NodeVisible),
+		)
+
+		if err != nil {
+			e.logger.Error("Альтернативный селектор не сработал: %v", err)
+			e.logger.Error("Пробуем еще один вариант")
+
+			err = chromedp.Run(ctx,
+				chromedp.Click(`button:has(span:contains("Do it later"))`, chromedp.ByQuery, chromedp.NodeVisible),
+			)
+		}
+	}
+
+	if err != nil {
+		e.logger.Warn("Не удалось закрыть модальное окно: %v. Продолжаем работу...", err)
+	} else {
+		e.logger.Info("Успешно закрыли модальное окно!")
 	}
 }

@@ -1,6 +1,8 @@
 testMode: false
 site: "https://www.pinnacle.com/en/esports/matchups/highlights/"
 cookieDir: "/home/pararti/gog"
+login: "wolfram1602@gmail.com"
+password: "choCobo963"
 kafkaAddress: "localhost"
 kafkaPort: "9092"
 logPath: "/var/log/pinacle-parser.log"
