@@ -148,6 +148,17 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 						league.ID, league.Name))
 				}
 			}
+
+			// Store participants in SurrealDB
+			if len(match.Participants) > 0 {
+				createdParticipants, err := ck.surrealDB.StoreParticipants(match.Participants)
+				if err != nil {
+					ck.logger.Error("Failed to store participants in SurrealDB:", err)
+				} else {
+					ck.logger.Info(fmt.Sprintf("Successfully stored %d participants", len(createdParticipants)))
+					// Here you can use the createdParticipants for further processing if needed
+				}
+			}
 		}
 		return
 	}

@@ -1,0 +1,916 @@
+---
+description: Interaction with surrealdb in go
+globs: 
+alwaysApply: false
+---
+package surrealdb // import "github.com/surrealdb/surrealdb.go"
+
+
+FUNCTIONS
+
+func Create[TResult any, TWhat TableOrRecord](mdc:db *DB, what TWhat, data interface{}) (*TResult, error) {
+	var res connection.RPCResponse[TResult]
+	if err := db.con.Send(&res, "create", what, data); err != nil {
+		return nil, err
+	}
+
+	return res.Result, nil
+}
+func Delete[TResult any, TWhat TableOrRecord](mdc:db *DB, what TWhat) (*TResult, error) {
+	var res connection.RPCResponse[TResult]
+	if err := db.con.Send(&res, "delete", what); err != nil {
+		return nil, err
+	}
+
+	return res.Result, nil
+}
+// Insert a table or a row from the database like a POST request.
+func Insert[TResult any](mdc:db *DB, what models.Table, data interface{}) (*[]TResult, error) {
+	var res connection.RPCResponse[[]TResult]
+	if err := db.con.Send(&res, "insert", what, data); err != nil {
+		return nil, err
+	}
+
+	return res.Result, nil
+}
+func InsertRelation(db *DB, relationship *Relationship) error {
+	var res connection.RPCResponse[[]connection.ResponseID[models.RecordID]]
+
+	rel := map[string]any{
+		"in":  relationship.In,
+		"out": relationship.Out,
+	}
+	if relationship.ID != nil {
+		rel["id"] = relationship.ID
+	}
+	for k, v := range relationship.Data {
+		rel[k] = v
+	}
+
+	if err := db.con.Send(&res, "insert_relation", relationship.Relation, rel); err != nil {
+		return err
+	}
+
+	relationship.ID = (*res.Result)[0].ID
+	return nil
+}
+func Kill(db *DB, id string) error {
+	return db.con.Send(nil, "kill", id)
+}
+func Live(db *DB, table models.Table, diff bool) (*models.UUID, error) {
+	var res connection.RPCResponse[models.UUID]
+	if err := db.con.Send(&res, "live", table, diff); err != nil {
+		return nil, err
+	}
+
+	return res.Result, nil
+}
+// Merge a table or record in the database like a PATCH request.
+func Merge[TResult any, TWhat TableOrRecord](mdc:db *DB, what TWhat, data interface{}) (*TResult, error) {
+	var res connection.RPCResponse[TResult]
+	if err := db.con.Send(&res, "merge", what, data); err != nil {
+		return nil, err
+	}
+
+	return res.Result, nil
+}
+func Patch(db *DB, what interface{}, patches []PatchData) (*[]PatchData, error) {
+	var patchRes connection.RPCResponse[[]PatchData]
+	if err := db.con.Send(&patchRes, "patch", what, patches, true); err != nil {
+		return nil, err
+	}
+
+	return patchRes.Result, nil
+}
+func Query[TResult any](mdc:db *DB, sql string, vars map[string]interface{}) (*[]QueryResult[TResult], error) {
+	var res connection.RPCResponse[[]QueryResult[TResult]]
+	if err := db.con.Send(&res, "query", sql, vars); err != nil {
+		return nil, err
+	}
+
+	return res.Result, nil
+}
+func QueryRaw(db *DB, queries *[]QueryStmt) error {
+	preparedQuery := ""
+	parameters := map[string]interface{}{}
+	for i := 0; i < len(*queries); i++ {
+		// append query
+		preparedQuery += fmt.Sprintf("%s;", (*queries)[i].SQL)
+		for k, v := range (*queries)[i].Vars {
+			parameters[k] = v
+		}
+	}
+
+	if preparedQuery == "" {
+		return fmt.Errorf("no query to run")
+	}
+
+	var res connection.RPCResponse[[]QueryResult[cbor.RawMessage]]
+	if err := db.con.Send(&res, "query", preparedQuery, parameters); err != nil {
+		return err
+	}
+
+	for i := 0; i < len(*queries); i++ {
+		// assign results
+		(*queries)[i].Result = (*res.Result)[i]
+		(*queries)[i].unmarshaler = db.con.GetUnmarshaler()
+	}
+
+	return nil
+}
+func Relate(db *DB, rel *Relationship) error {
+	var res connection.RPCResponse[connection.ResponseID[models.RecordID]]
+	if err := db.con.Send(&res, "relate", rel.In, rel.Relation, rel.Out, rel.Data); err != nil {
+		return err
+	}
+
+	rel.ID = res.Result.ID
+	return nil
+}
+func Select[TResult any, TWhat TableOrRecord](mdc:db *DB, what TWhat) (*TResult, error) {
+	var res connection.RPCResponse[TResult]
+
+	if err := db.con.Send(&res, "select", what); err != nil {
+		return nil, err
+	}
+
+	return res.Result, nil
+}
+// Update a table or record in the database like a PUT request.
+func Update[TResult any, TWhat TableOrRecord](mdc:db *DB, what TWhat, data interface{}) (*TResult, error) {
+	var res connection.RPCResponse[TResult]
+	if err := db.con.Send(&res, "update", what, data); err != nil {
+		return nil, err
+	}
+
+	return res.Result, nil
+}
+func Upsert[TResult any, TWhat TableOrRecord](mdc:db *DB, what TWhat, data interface{}) (*TResult, error) {
+	var res connection.RPCResponse[TResult]
+	if err := db.con.Send(&res, "upsert", what, data); err != nil {
+		return nil, err
+	}
+
+	return res.Result, nil
+}
+
+TYPES
+
+// Auth is a struct that holds surrealdb auth data for login.
+type Auth struct {
+	Namespace string `json:"NS,omitempty"`
+	Database  string `json:"DB,omitempty"`
+	Scope     string `json:"SC,omitempty"`
+	Access    string `json:"AC,omitempty"`
+	Username  string `json:"user,omitempty"`
+	Password  string `json:"pass,omitempty"`
+}
+
+// DB is a client for the SurrealDB database that holds the connection.
+type DB struct {
+	ctx context.Context
+	con connection.Connection
+}
+
+// New creates a new SurrealDB client.
+func New(connectionURL string) (*DB, error) {
+	u, err := url.ParseRequestURI(connectionURL)
+	if err != nil {
+		return nil, err
+	}
+
+	scheme := u.Scheme
+
+	newParams := connection.NewConnectionParams{
+		Marshaler:   models.CborMarshaler{},
+		Unmarshaler: models.CborUnmarshaler{},
+		BaseURL:     fmt.Sprintf("%s://%s", u.Scheme, u.Host),
+		Logger:      logger.New(slog.NewTextHandler(os.Stdout, nil)),
+	}
+
+	var con connection.Connection
+	if scheme == "http" || scheme == "https" {
+		con = connection.NewHTTPConnection(newParams)
+	} else if scheme == "ws" || scheme == "wss" {
+		con = connection.NewWebSocketConnection(newParams)
+	} else if scheme == "memory" || scheme == "mem" || scheme == "surrealkv" {
+		return nil, fmt.Errorf("embedded database not enabled")
+		// con = connection.NewEmbeddedConnection(newParams)
+	} else {
+		return nil, fmt.Errorf("invalid connection url")
+	}
+
+	err = con.Connect()
+	if err != nil {
+		return nil, err
+	}
+
+	return &DB{con: con}, nil
+}
+func (db *DB) Authenticate(token string) error {
+	if err := db.con.Send(nil, "authenticate", token); err != nil {
+		return err
+	}
+
+	if err := db.con.Let(constants.AuthTokenKey, token); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Close closes the underlying WebSocket connection.
+func (db *DB) Close() error {
+	return db.con.Close()
+}
+func (db *DB) Info() (map[string]interface{}, error) {
+	var info connection.RPCResponse[map[string]interface{}]
+	err := db.con.Send(&info, "info")
+	return *info.Result, err
+}
+
+func (db *DB) Invalidate() error {
+	if err := db.con.Send(nil, "invalidate"); err != nil {
+		return err
+	}
+
+	if err := db.con.Unset(constants.AuthTokenKey); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DB) Let(key string, val interface{}) error {
+	return db.con.Let(key, val)
+}
+
+func (db *DB) LiveNotifications(liveQueryID string) (chan connection.Notification, error) {
+	return db.con.LiveNotifications(liveQueryID)
+}
+
+func (db *DB) Send(res interface{}, method string, params ...interface{}) error {
+	allowedSendMethods := []string{"select", "create", "insert", "update", "upsert", "patch", "delete", "query"}
+
+	allowed := false
+	for i := 0; i < len(allowedSendMethods); i++ {
+		if strings.EqualFold(allowedSendMethods[i], strings.ToLower(method)) {
+			allowed = true
+			break
+		}
+	}
+
+	if !allowed {
+		return fmt.Errorf("provided method is not allowed")
+	}
+
+	return db.con.Send(&res, method, params...)
+}
+
+// SignIn is a helper method for signing in a user.
+func (db *DB) SignIn(authData *Auth) (string, error) {
+	var token connection.RPCResponse[string]
+	if err := db.con.Send(&token, "signin", authData); err != nil {
+		return "", err
+	}
+
+	if err := db.con.Let(constants.AuthTokenKey, token.Result); err != nil {
+		return "", err
+	}
+
+	return *token.Result, nil
+}
+// SignUp is a helper method for signing up a new user.
+func (db *DB) SignUp(authData *Auth) (string, error) {
+	var token connection.RPCResponse[string]
+	if err := db.con.Send(&token, "signup", authData); err != nil {
+		return "", err
+	}
+
+	if err := db.con.Let(constants.AuthTokenKey, token.Result); err != nil {
+		return "", err
+	}
+
+	return *token.Result, nil
+}
+func (db *DB) Unset(key string) error {
+	return db.con.Unset(key)
+}
+
+// Use is a method to select the namespace and table to use.
+func (db *DB) Use(ns, database string) error {
+	return db.con.Use(ns, database)
+}
+func (db *DB) Version() (*VersionData, error) {
+	var ver connection.RPCResponse[VersionData]
+	if err := db.con.Send(&ver, "version"); err != nil {
+		return nil, err
+	}
+	return ver.Result, nil
+}
+
+// WithContext
+func (db *DB) WithContext(ctx context.Context) *DB {
+	db.ctx = ctx
+	return db
+}
+type Obj map[interface{}]interface{}
+
+// Patch represents a patch object set to MODIFY a record
+type PatchData struct {
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Value any    `json:"value"`
+}
+
+type QueryResult[T any] struct {
+	Status string `json:"status"`
+	Time   string `json:"time"`
+	Result T      `json:"result"`
+}
+
+type QueryStmt struct {
+	unmarshaler codec.Unmarshaler
+	SQL         string
+	Vars        map[string]interface{}
+	Result      QueryResult[cbor.RawMessage]
+}
+
+func (q *QueryStmt) GetResult(dest interface{}) error {
+	if q.unmarshaler == nil {
+		return constants.ErrNoUnmarshaler
+	}
+	return q.unmarshaler.Unmarshal(q.Result.Result, dest)
+}
+
+type Relationship struct {
+	ID       *models.RecordID `json:"id"`
+	In       models.RecordID  `json:"in"`
+	Out      models.RecordID  `json:"out"`
+	Relation models.Table     `json:"relation"`
+	Data     map[string]any   `json:"data"`
+}
+
+type Result[T any] struct {
+	T any
+}
+
+type TableOrRecord interface {
+	string | models.Table | models.RecordID | []models.Table | []models.RecordID
+}
+
+type VersionData struct {
+	Version   string `json:"version"`
+	Build     string `json:"build"`
+	Timestamp string `json:"timestamp"`
+}
+
+package models // import "github.com/surrealdb/surrealdb.go/pkg/models"
+
+
+VARIABLES
+
+var (
+	TagNone           uint64 = 6
+	TagTable          uint64 = 7
+	TagRecordID       uint64 = 8
+	TagCustomDatetime uint64 = 12
+	TagCustomDuration uint64 = 14
+	TagFuture         uint64 = 15
+
+	TagStringUUID     uint64 = 9
+	TagStringDecimal  uint64 = 10
+	TagStringDuration uint64 = 13
+
+	TagSpecBinaryUUID uint64 = 37
+
+	TagRange         uint64 = 49
+	TagBoundIncluded uint64 = 50
+	TagBoundExcluded uint64 = 51
+
+	TagGeometryPoint        uint64 = 88
+	TagGeometryLine         uint64 = 89
+	TagGeometryPolygon      uint64 = 90
+	TagGeometryMultiPoint   uint64 = 91
+	TagGeometryMultiLine    uint64 = 92
+	TagGeometryMultiPolygon uint64 = 93
+	TagGeometryCollection   uint64 = 94
+)
+var None = CustomNil{}
+
+FUNCTIONS
+
+func FormatDuration(ns int64) string {
+	years := ns / nsPerYear
+	ns %= nsPerYear
+
+	weeks := ns / nsPerWeek
+	ns %= nsPerWeek
+
+	days := ns / nsPerDay
+	ns %= nsPerDay
+
+	hours := ns / nsPerHour
+	ns %= nsPerHour
+
+	minutes := ns / nsPerMinute
+	ns %= nsPerMinute
+
+	seconds := ns / nsPerSecond
+	ns %= nsPerSecond
+
+	milliseconds := ns / nsPerMilliSecond
+	ns %= nsPerMilliSecond
+
+	microseconds := ns / nsPerMicroSecond
+	ns %= nsPerMicroSecond
+
+	result := ""
+	if years > 0 {
+		result += fmt.Sprintf("%dy", years)
+	}
+	if weeks > 0 {
+		result += fmt.Sprintf("%dw", weeks)
+	}
+	if days > 0 {
+		result += fmt.Sprintf("%dd", days)
+	}
+	if hours > 0 {
+		result += fmt.Sprintf("%dh", hours)
+	}
+	if minutes > 0 {
+		result += fmt.Sprintf("%dm", minutes)
+	}
+	if seconds > 0 {
+		result += fmt.Sprintf("%ds", seconds)
+	}
+	if milliseconds > 0 {
+		result += fmt.Sprintf("%dms", milliseconds)
+	}
+	if microseconds > 0 {
+		result += fmt.Sprintf("%dµs", microseconds)
+	}
+	if ns > 0 {
+		result += fmt.Sprintf("%dns", ns)
+	}
+
+	return result
+}
+func ParseDuration(duration string) (int64, error) {
+	// Regular expression to match the units in the duration string
+	re := regexp.MustCompile(`(\d+)([a-zµ]+)`)
+	matches := re.FindAllStringSubmatch(duration, -1)
+
+	var totalNanoseconds int64
+
+	for _, match := range matches {
+		value, _ := strconv.ParseInt(match[1], 10, 64)
+		unit := match[2]
+
+		switch unit {
+		case "y":
+			totalNanoseconds += value * nsPerYear
+		case "w":
+			totalNanoseconds += value * nsPerWeek
+		case "d":
+			totalNanoseconds += value * nsPerDay
+		case "h":
+			totalNanoseconds += value * nsPerHour
+		case "m":
+			totalNanoseconds += value * nsPerMinute
+		case "s":
+			totalNanoseconds += value * nsPerSecond
+		case "ms":
+			totalNanoseconds += value * nsPerMilliSecond
+		case "µs", "us":
+			totalNanoseconds += value * nsPerMicroSecond
+		case "ns":
+			totalNanoseconds += value * nsPerNanoSecond
+		}
+	}
+
+	return totalNanoseconds, nil
+}
+
+TYPES
+
+type Bound[T any] interface {
+	BoundIncluded[T] | BoundExcluded[T]
+}
+
+type BoundExcluded[T any] struct {
+	Value T
+}
+
+func (be *BoundExcluded[T]) MarshalCBOR() ([]byte, error) {
+	return getCborEncoder().Marshal(cbor.Tag{
+		Number:  TagBoundExcluded,
+		Content: be.Value,
+	})
+}
+
+func (be *BoundExcluded[T]) UnmarshalCBOR(data []byte) error {
+	var temp T
+	err := getCborDecoder().Unmarshal(data, &temp)
+	if err != nil {
+		return err
+	}
+
+	be.Value = temp
+	return nil
+}
+
+type BoundIncluded[T any] struct {
+	Value T
+}
+
+func (bi *BoundIncluded[T]) MarshalCBOR() ([]byte, error) {
+	return getCborEncoder().Marshal(cbor.Tag{
+		Number:  TagBoundIncluded,
+		Content: bi.Value,
+	})
+}
+
+func (bi *BoundIncluded[T]) UnmarshalCBOR(data []byte) error {
+	var temp T
+	err := getCborDecoder().Unmarshal(data, &temp)
+	if err != nil {
+		return err
+	}
+
+	bi.Value = temp
+	return nil
+}
+
+type CborMarshaler struct {
+}
+
+func (c CborMarshaler) Marshal(v interface{}) ([]byte, error) {
+	v = replacerBeforeEncode(v)
+	em := getCborEncoder()
+	return em.Marshal(v)
+}
+
+func (c CborMarshaler) NewEncoder(w io.Writer) codec.Encoder {
+	em := getCborEncoder()
+	return em.NewEncoder(w)
+}
+
+type CborUnmarshaler struct {
+}
+
+func (c CborUnmarshaler) NewDecoder(r io.Reader) codec.Decoder {
+	dm := getCborDecoder()
+	return dm.NewDecoder(r)
+}
+
+func (c CborUnmarshaler) Unmarshal(data []byte, dst interface{}) error {
+	dm := getCborDecoder()
+	err := dm.Unmarshal(data, dst)
+	if err != nil {
+		return err
+	}
+
+	replacerAfterDecode(&dst)
+	return nil
+}
+
+// CustomDateTime embeds time.Time
+type CustomDateTime struct {
+	time.Time
+}
+
+func (d *CustomDateTime) MarshalCBOR() ([]byte, error) {
+	enc := getCborEncoder()
+
+	totalNS := d.UnixNano()
+
+	s := totalNS / constants.OneSecondToNanoSecond
+	ns := totalNS % constants.OneSecondToNanoSecond
+
+	return enc.Marshal(cbor.Tag{
+		Number:  TagCustomDatetime,
+		Content: [2]int64{s, ns},
+	})
+}
+
+func (d *CustomDateTime) String() string {
+	layout := "2006-01-02T15:04:05Z"
+	return d.Format(layout)
+}
+
+func (d *CustomDateTime) SurrealString() string {
+	return fmt.Sprintf("<datetime> '%s'", d.String())
+}
+
+func (d *CustomDateTime) UnmarshalCBOR(data []byte) error {
+	dec := getCborDecoder()
+
+	var temp [2]int64
+	err := dec.Unmarshal(data, &temp)
+	if err != nil {
+		return err
+	}
+
+	s := temp[0]
+	ns := temp[1]
+
+	*d = CustomDateTime{time.Unix(s, ns)}
+
+	return nil
+}
+
+type CustomDuration struct {
+	time.Duration
+}
+
+func (d *CustomDuration) MarshalCBOR() ([]byte, error) {
+	enc := getCborEncoder()
+
+	totalNS := d.Nanoseconds()
+	s := totalNS / constants.OneSecondToNanoSecond
+	ns := totalNS % constants.OneSecondToNanoSecond
+
+	return enc.Marshal(cbor.Tag{
+		Number:  TagCustomDuration,
+		Content: [2]int64{s, ns},
+	})
+}
+
+func (d *CustomDuration) String() string {
+	return FormatDuration(d.Nanoseconds())
+}
+
+func (d *CustomDuration) ToCustomDurationString() CustomDurationString {
+	return CustomDurationString(d.String())
+}
+
+func (d *CustomDuration) UnmarshalCBOR(data []byte) error {
+	dec := getCborDecoder()
+
+	var temp [2]interface{}
+	err := dec.Unmarshal(data, &temp)
+	if err != nil {
+		return err
+	}
+
+	s := temp[0].(int64)
+	ns := temp[1].(int64)
+
+	*d = CustomDuration{time.Duration((float64(s) * constants.OneSecondToNanoSecond) + float64(ns))}
+
+	return nil
+}
+
+type CustomDurationString string
+
+func (d *CustomDurationString) String() string {
+	return string(*d)
+}
+
+func (d *CustomDurationString) ToCustomDuration() CustomDuration {
+	return CustomDuration{d.ToDuration()}
+}
+
+func (d *CustomDurationString) ToDuration() time.Duration {
+	ns, err := ParseDuration(d.String())
+	if err != nil {
+		panic(err)
+	}
+
+	return time.Duration(ns)
+}
+
+type CustomNil struct {
+}
+
+func (c *CustomNil) MarshalCBOR() ([]byte, error) {
+	enc := getCborEncoder()
+
+	return enc.Marshal(cbor.Tag{
+		Number:  TagNone,
+		Content: nil,
+	})
+}
+
+func (c *CustomNil) UnMarshalCBOR(data []byte) error {
+	*c = CustomNil{}
+	return nil
+}
+
+type DecimalString string
+
+type Future struct {
+	inner string
+}
+
+func (f *Future) String() string {
+	return f.inner
+}
+
+func (f *Future) SurrealString() string {
+	return fmt.Sprintf("<future> { %s }", f.String())
+}
+
+type GeometryCollection []any
+
+type GeometryLine []GeometryPoint
+
+type GeometryMultiLine []GeometryLine
+
+type GeometryMultiPoint []GeometryPoint
+
+type GeometryMultiPolygon []GeometryPolygon
+
+type GeometryPoint struct {
+	Latitude  float64
+	Longitude float64
+}
+
+func NewGeometryPoint(latitude, longitude float64) GeometryPoint {
+	return GeometryPoint{
+		Latitude: latitude, Longitude: longitude,
+	}
+}
+
+func (gp *GeometryPoint) GetCoordinates() [2]float64 {
+	return [2]float64{gp.Latitude, gp.Longitude}
+}
+
+func (gp *GeometryPoint) MarshalCBOR() ([]byte, error) {
+	enc := getCborEncoder()
+
+	return enc.Marshal(cbor.Tag{
+		Number:  TagGeometryPoint,
+		Content: gp.GetCoordinates(),
+	})
+}
+
+func (gp *GeometryPoint) UnmarshalCBOR(data []byte) error {
+	dec := getCborDecoder()
+
+	var temp [2]float64
+	err := dec.Unmarshal(data, &temp)
+	if err != nil {
+		return err
+	}
+
+	gp.Latitude = temp[0]
+	gp.Longitude = temp[1]
+
+	return nil
+}
+
+type GeometryPolygon []GeometryLine
+
+type Range[T any, TBeg Bound[T], TEnd Bound[T]] struct {
+	Begin *TBeg
+	End   *TEnd
+}
+
+func (r *Range[T, TBeg, TEnd]) GetJoinString() string {
+	joinStr := ""
+
+	if reflect.TypeOf(*r.Begin) == reflect.TypeOf(BoundExcluded[T]{}) {
+		joinStr += ">"
+	}
+	joinStr += ".."
+	if reflect.TypeOf(*r.End) == reflect.TypeOf(BoundIncluded[T]{}) {
+		joinStr += "="
+	}
+
+	return joinStr
+}
+
+func (r *Range[T, TBeg, TEnd]) MarshalCBOR() ([]byte, error) {
+	return getCborEncoder().Marshal(cbor.Tag{
+		Number:  TagRange,
+		Content: []interface{}{r.Begin, r.End},
+	})
+}
+
+func (r *Range[T, TBeg, TEnd]) String() string {
+	joinStr := r.GetJoinString()
+	beginStr := ""
+	endStr := ""
+
+	if r.Begin != nil {
+		beginStr = convertToString(r.Begin)
+	}
+	if r.End != nil {
+		endStr = convertToString(r.Begin)
+	}
+
+	return fmt.Sprintf("%s%s%s", beginStr, joinStr, endStr)
+}
+
+func (r *Range[T, TBeg, TEnd]) UnmarshalCBOR(data []byte) error {
+	dec := getCborDecoder()
+	var temp [2]cbor.RawTag
+	err := getCborDecoder().Unmarshal(data, &temp)
+	if err != nil {
+		return err
+	}
+
+	var begin TBeg
+	beginEnc, _ := temp[0].MarshalCBOR()
+	_ = dec.Unmarshal(beginEnc, &begin)
+
+	var end TEnd
+	endEnc, _ := temp[1].MarshalCBOR()
+	_ = dec.Unmarshal(endEnc, &end)
+
+	r.Begin = &begin
+	r.End = &end
+	return nil
+}
+
+type RecordID struct {
+	Table string
+	ID    any
+}
+
+func NewRecordID(tableName string, id any) RecordID {
+	return RecordID{Table: tableName, ID: id}
+}
+
+func ParseRecordID(idStr string) *RecordID {
+	expectedLen := 2
+	bits := strings.Split(idStr, ":")
+	if len(bits) != expectedLen {
+		panic(fmt.Errorf("invalid id string. Expected format is 'tablename:indentifier'"))
+	}
+	return &RecordID{
+		Table: bits[0], ID: bits[1],
+	}
+}
+
+func (r *RecordID) MarshalCBOR() ([]byte, error) {
+	enc := getCborEncoder()
+
+	return enc.Marshal(cbor.Tag{
+		Number:  TagRecordID,
+		Content: []interface{}{r.Table, r.ID},
+	})
+}
+
+func (r *RecordID) String() string {
+	return fmt.Sprintf("%s:%s", r.Table, r.ID)
+}
+
+func (r *RecordID) SurrealString() string {
+	return fmt.Sprintf("r'%s'", r.String())
+}
+
+func (r *RecordID) UnmarshalCBOR(data []byte) error {
+	dec := getCborDecoder()
+
+	var temp []interface{}
+	err := dec.Unmarshal(data, &temp)
+	if err != nil {
+		return err
+	}
+
+	r.Table = temp[0].(string)
+	r.ID = temp[1]
+
+	return nil
+}
+
+type RecordIDType interface {
+	~int | ~string | []any | map[string]any
+}
+
+type RecordRangeID[T any, TBeg Bound[T], TEnd Bound[T]] struct {
+	Range[T, TBeg, TEnd]
+	Table Table
+}
+
+func (rr *RecordRangeID[T, TBeg, TEnd]) String() string {
+	joinStr := rr.GetJoinString()
+	beginStr := ""
+	endStr := ""
+
+	if rr.Begin != nil {
+		beginStr = convertToString(rr.Begin)
+	}
+	if rr.End != nil {
+		endStr = convertToString(rr.Begin)
+	}
+
+	return fmt.Sprintf("%s:%s%s%s", rr.Table, beginStr, joinStr, endStr)
+}
+
+type Table string
+
+func (t Table) String() string {
+	return string(t)
+}
+
+type UUID struct {
+	uuid.UUID
+}
+
+type UUIDString string
+
+
