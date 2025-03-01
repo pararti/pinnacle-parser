@@ -110,7 +110,7 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 		fmt.Printf("Source: %s\n", matchMsg.Source)
 		fmt.Printf("Number of matches: %d\n", len(matchMsg.Data))
 
-		// Process each match and store its sport in SurrealDB
+		// Process each match and store its sport and league in SurrealDB
 		for i, match := range matchMsg.Data {
 			// Extract participant names for home and away
 			var homeName, awayName string
@@ -136,6 +136,16 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 				} else {
 					ck.logger.Info(fmt.Sprintf("Stored sport in SurrealDB: ID=%d, Name=%s",
 						sport.ID, sport.Name))
+				}
+
+				// Store league in SurrealDB
+				league := match.League
+				err = ck.surrealDB.StoreLeague(league)
+				if err != nil {
+					ck.logger.Error("Failed to store league in SurrealDB:", err)
+				} else {
+					ck.logger.Info(fmt.Sprintf("Stored league in SurrealDB: ID=%d, Name=%s",
+						league.ID, league.Name))
 				}
 			}
 		}

@@ -62,6 +62,17 @@ type SportRecord struct {
 	Name string          `json:"name"`
 }
 
+// LeagueRecord represents a league record in SurrealDB
+type LeagueRecord struct {
+	ID         models.RecordID `json:"id"`
+	Name       string          `json:"name"`
+	Group      string          `json:"group,omitempty"`
+	IsHidden   bool            `json:"isHidden"`
+	IsPromoted bool            `json:"isPromoted"`
+	IsSticky   bool            `json:"isSticky"`
+	Sequence   int             `json:"sequence"`
+}
+
 // QueryResult represents a single query result
 type QueryResult[T any] struct {
 	Status string `json:"status"`
@@ -99,6 +110,73 @@ func (s *SurrealDBClient) StoreSport(sport *parsed.Sport) error {
 	}
 
 	s.logger.Info(fmt.Sprintf("Successfully stored sport: ID=%d, Name=%s", sport.ID, sport.Name))
+	return nil
+}
+
+// StoreLeague stores a league in SurrealDB and creates a BELONGS_TO relationship to its sport
+func (s *SurrealDBClient) StoreLeague(league *parsed.League) error {
+	if league == nil {
+		return fmt.Errorf("cannot store nil league")
+	}
+
+	if league.Sport == nil {
+		return fmt.Errorf("league must have an associated sport")
+	}
+
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
+
+	// Debug the league data
+	s.logger.Info(fmt.Sprintf("Attempting to store league: ID=%d, Name=%s, Sport ID=%d",
+		league.ID, league.Name, league.Sport.ID))
+
+	// Create record ID for the league
+	leagueRecordID := models.NewRecordID("leagues", league.ID)
+
+	// Create a LeagueRecord from the parsed.League (without sport reference)
+	leagueRecord := LeagueRecord{
+		ID:         leagueRecordID,
+		Name:       league.Name,
+		Group:      league.Group,
+		IsHidden:   league.IsHidden,
+		IsPromoted: league.IsPromoted,
+		IsSticky:   league.IsSticky,
+		Sequence:   league.Sequence,
+	}
+
+	// Upsert the league record
+	_, err := surrealdb.Upsert[LeagueRecord](s.db.WithContext(ctx), leagueRecordID, leagueRecord)
+	if err != nil {
+		s.logger.Info(fmt.Sprintf("Error storing league: %v", err))
+		return fmt.Errorf("failed to store league: %w", err)
+	}
+
+	// Now create a relationship between league and sport
+	sportRecordID := models.NewRecordID("sports", league.Sport.ID)
+
+	// Define the relationship - league BELONGS_TO sport
+	relation := models.Table("belongs_to")
+
+	// Create the relationship object
+	relationship := &surrealdb.Relationship{
+		In:       sportRecordID,  // The target node (sport)
+		Out:      leagueRecordID, // The source node (league)
+		Relation: relation,       // The edge type (belongs_to)
+		// Optional data to store on the relationship edge
+		Data: map[string]any{
+			"created_at": time.Now(),
+		},
+	}
+
+	// Create the relationship in SurrealDB
+	err = surrealdb.Relate(s.db.WithContext(ctx), relationship)
+	if err != nil {
+		s.logger.Info(fmt.Sprintf("Error creating relationship between league and sport: %v", err))
+		return fmt.Errorf("failed to create league-sport relationship: %w", err)
+	}
+
+	s.logger.Info(fmt.Sprintf("Successfully stored league: ID=%d, Name=%s and created relationship to sport ID=%d",
+		league.ID, league.Name, league.Sport.ID))
 	return nil
 }
 
