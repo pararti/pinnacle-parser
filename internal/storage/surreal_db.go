@@ -53,46 +53,7 @@ func NewSurrealDBClient(address, username, password, namespace, database string,
 		ctx:    context.Background(), // Use a background context for subsequent operations
 	}
 
-	// Ensure the sports table exists
-	if err := client.ensureSportsTable(); err != nil {
-		return nil, fmt.Errorf("failed to ensure sports table: %w", err)
-	}
-
 	return client, nil
-}
-
-// ensureSportsTable ensures that the sports table exists with the correct schema
-func (s *SurrealDBClient) ensureSportsTable() error {
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-	defer cancel()
-
-	// Use structured query instead of raw string format
-	query := `INFO FOR TABLE sports`
-
-	// Check if table exists - we don't need the result, just need to know if query succeeds
-	_, err := surrealdb.Query[map[string]interface{}](s.db.WithContext(ctx), query, nil)
-	if err != nil {
-		s.logger.Info("Sports table not found, creating it...")
-
-		// Create a schema with proper constraints
-		createQuery := `
-		DEFINE TABLE sports SCHEMAFULL;
-		DEFINE FIELD id ON sports TYPE number;
-		DEFINE FIELD name ON sports TYPE string;
-		DEFINE INDEX sports_id ON TABLE sports COLUMNS id UNIQUE;
-		DEFINE INDEX sports_name ON TABLE sports COLUMNS name UNIQUE;
-		`
-
-		// Execute the creation query with proper error handling
-		_, err := surrealdb.Query[interface{}](s.db.WithContext(ctx), createQuery, nil)
-		if err != nil {
-			return fmt.Errorf("failed to create sports table: %w", err)
-		}
-
-		s.logger.Info("Sports table created successfully")
-	}
-
-	return nil
 }
 
 // SportRecord represents a sport record in SurrealDB
