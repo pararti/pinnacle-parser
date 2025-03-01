@@ -3,10 +3,12 @@ package storage
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/pararti/pinnacle-parser/internal/models/parsed"
 	"github.com/pararti/pinnacle-parser/pkg/logger"
 	"github.com/surrealdb/surrealdb.go"
+	"github.com/surrealdb/surrealdb.go/pkg/models"
 )
 
 // SurrealDBClient handles the connection and operations with SurrealDB
@@ -18,7 +20,9 @@ type SurrealDBClient struct {
 
 // NewSurrealDBClient creates a new SurrealDB client
 func NewSurrealDBClient(address, username, password, namespace, database string, logger *logger.Logger) (*SurrealDBClient, error) {
-	ctx := context.Background()
+	// Create a context with timeout for initial operations
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	// Connect to SurrealDB
 	db, err := surrealdb.New(address)
@@ -32,13 +36,13 @@ func NewSurrealDBClient(address, username, password, namespace, database string,
 		Password: password,
 	}
 
-	_, err = db.SignIn(auth)
+	_, err = db.WithContext(ctx).SignIn(auth)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign in to SurrealDB: %w", err)
 	}
 
 	// Use the specified namespace and database
-	err = db.Use(namespace, database)
+	err = db.WithContext(ctx).Use(namespace, database)
 	if err != nil {
 		return nil, fmt.Errorf("failed to use namespace and database: %w", err)
 	}
@@ -46,7 +50,7 @@ func NewSurrealDBClient(address, username, password, namespace, database string,
 	client := &SurrealDBClient{
 		db:     db,
 		logger: logger,
-		ctx:    ctx,
+		ctx:    context.Background(), // Use a background context for subsequent operations
 	}
 
 	// Ensure the sports table exists
@@ -59,18 +63,18 @@ func NewSurrealDBClient(address, username, password, namespace, database string,
 
 // ensureSportsTable ensures that the sports table exists with the correct schema
 func (s *SurrealDBClient) ensureSportsTable() error {
-	// Check if the sports table exists by querying for its definition
-	query := "INFO FOR TABLE sports"
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
 
-	// Execute the query directly using Send method to avoid type issues
-	var result interface{}
-	err := s.db.Send(&result, "query", query, nil)
+	// Use structured query instead of raw string format
+	query := `INFO FOR TABLE sports`
 
-	// If there's an error, the table might not exist, so we create it
+	// Check if table exists - we don't need the result, just need to know if query succeeds
+	_, err := surrealdb.Query[map[string]interface{}](s.db.WithContext(ctx), query, nil)
 	if err != nil {
 		s.logger.Info("Sports table not found, creating it...")
 
-		// Create the sports table with a schema that enforces uniqueness on id and name
+		// Create a schema with proper constraints
 		createQuery := `
 		DEFINE TABLE sports SCHEMAFULL;
 		DEFINE FIELD id ON sports TYPE number;
@@ -79,9 +83,8 @@ func (s *SurrealDBClient) ensureSportsTable() error {
 		DEFINE INDEX sports_name ON TABLE sports COLUMNS name UNIQUE;
 		`
 
-		// Execute the creation query directly
-		var createResult interface{}
-		err := s.db.Send(&createResult, "query", createQuery, nil)
+		// Execute the creation query with proper error handling
+		_, err := surrealdb.Query[interface{}](s.db.WithContext(ctx), createQuery, nil)
 		if err != nil {
 			return fmt.Errorf("failed to create sports table: %w", err)
 		}
@@ -94,70 +97,54 @@ func (s *SurrealDBClient) ensureSportsTable() error {
 
 // SportRecord represents a sport record in SurrealDB
 type SportRecord struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID   models.RecordID `json:"id"`
+	Name string          `json:"name"`
 }
 
-// QueryResponse represents a response from SurrealDB
-type QueryResponse struct {
-	Status string      `json:"status"`
-	Time   string      `json:"time"`
-	Result interface{} `json:"result"`
+// QueryResult represents a single query result
+type QueryResult[T any] struct {
+	Status string `json:"status"`
+	Time   string `json:"time"`
+	Result T      `json:"result"`
 }
 
 // StoreSport stores a sport in SurrealDB, ensuring it's unique by ID and name
+// It uses RecordID to identify the specific record and Upsert to create or update it
 func (s *SurrealDBClient) StoreSport(sport *parsed.Sport) error {
 	if sport == nil {
 		return fmt.Errorf("cannot store nil sport")
 	}
 
-	// Check if sport already exists by ID
-	query := fmt.Sprintf("SELECT * FROM sports WHERE id = %d", sport.ID)
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
 
-	// Use any for the result type to safely handle whatever is returned
-	var result interface{}
-	err := s.db.Send(&result, "query", query, nil)
+	// Debug the sport data
+	s.logger.Info(fmt.Sprintf("Attempting to store sport: ID=%d, Name=%s", sport.ID, sport.Name))
+
+	// Create record ID for the sport using the models.NewRecordID helper
+	// This creates a proper SurrealDB record identifier in the format "sports:<id>"
+	recordID := models.NewRecordID("sports", sport.ID)
+	// Create a SportRecord from the parsed.Sport
+	sportRecord := SportRecord{
+		ID:   recordID,
+		Name: sport.Name,
+	}
+	// Use the Upsert[T] method with record ID
+	// This will create the record if it doesn't exist, or update it if it does
+	_, err := surrealdb.Upsert[SportRecord](s.db.WithContext(ctx), recordID, sportRecord)
 	if err != nil {
-		return fmt.Errorf("failed to query sport by ID: %w", err)
+		s.logger.Info(fmt.Sprintf("Error storing sport: %v", err))
+		return fmt.Errorf("failed to store sport: %w", err)
 	}
 
-	// Check if we got any results by examining the result structure
-	// The result is an array of query responses, and we need to check if any records were returned
-	results, ok := result.([]interface{})
-	hasRecords := false
-
-	if ok && len(results) > 0 {
-		// Check if the first result has any records
-		if firstResult, ok := results[0].(map[string]interface{}); ok {
-			if resultArray, ok := firstResult["result"].([]interface{}); ok {
-				hasRecords = len(resultArray) > 0
-			}
-		}
-	}
-
-	if hasRecords {
-		s.logger.Info(fmt.Sprintf("Sport already exists: ID=%d, Name=%s", sport.ID, sport.Name))
-		return nil
-	}
-
-	// Sport doesn't exist, create it
-	s.logger.Info(fmt.Sprintf("Adding new sport: ID=%d, Name=%s", sport.ID, sport.Name))
-
-	// Create the sport record using a simple insert statement to avoid type issues
-	createQuery := fmt.Sprintf("INSERT INTO sports (id, name) VALUES (%d, '%s')", sport.ID, sport.Name)
-
-	var createResult interface{}
-	err = s.db.Send(&createResult, "query", createQuery, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create sport: %w", err)
-	}
-
+	s.logger.Info(fmt.Sprintf("Successfully stored sport: ID=%d, Name=%s", sport.ID, sport.Name))
 	return nil
 }
 
 // Close closes the connection to SurrealDB
-func (s *SurrealDBClient) Close() {
+func (s *SurrealDBClient) Close() error {
 	if s.db != nil {
-		s.db.Close()
+		return s.db.Close()
 	}
+	return nil
 }
