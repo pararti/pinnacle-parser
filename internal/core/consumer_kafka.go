@@ -10,13 +10,15 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/pararti/pinnacle-parser/internal/models/kafkadata"
 	"github.com/pararti/pinnacle-parser/internal/options"
+	"github.com/pararti/pinnacle-parser/internal/storage"
 	"github.com/pararti/pinnacle-parser/pkg/constants"
 	"github.com/pararti/pinnacle-parser/pkg/logger"
 )
 
 type ConsumerKafka struct {
-	logger   *logger.Logger
-	consumer *kafka.Consumer
+	logger    *logger.Logger
+	consumer  *kafka.Consumer
+	surrealDB *storage.SurrealDBClient
 }
 
 func NewConsumerKafka(l *logger.Logger, options *options.Options) *ConsumerKafka {
@@ -35,7 +37,24 @@ func NewConsumerKafka(l *logger.Logger, options *options.Options) *ConsumerKafka
 		l.Fatal("Failed to create Kafka consumer:", err)
 	}
 
-	return &ConsumerKafka{logger: l, consumer: c}
+	// Initialize SurrealDB client
+	surrealDB, err := storage.NewSurrealDBClient(
+		options.SurrealDBAddress,
+		options.SurrealDBUsername,
+		options.SurrealDBPassword,
+		options.SurrealDBNamespace,
+		options.SurrealDBDatabase,
+		l,
+	)
+	if err != nil {
+		l.Fatal("Failed to create SurrealDB client:", err)
+	}
+
+	return &ConsumerKafka{
+		logger:    l,
+		consumer:  c,
+		surrealDB: surrealDB,
+	}
 }
 
 func (ck *ConsumerKafka) Start(topic string) {
@@ -76,7 +95,7 @@ func (ck *ConsumerKafka) Start(topic string) {
 	}
 
 	ck.logger.Info("Closing consumer")
-	ck.consumer.Close()
+	ck.Stop()
 }
 
 func (ck *ConsumerKafka) processMessage(data []byte) {
@@ -91,6 +110,7 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 		fmt.Printf("Source: %s\n", matchMsg.Source)
 		fmt.Printf("Number of matches: %d\n", len(matchMsg.Data))
 
+		// Process each match and store its sport in SurrealDB
 		for i, match := range matchMsg.Data {
 			// Extract participant names for home and away
 			var homeName, awayName string
@@ -106,6 +126,18 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 
 			fmt.Printf("Match #%d: ID=%d, League=%s, Home=%s, Away=%s\n",
 				i+1, match.ID, leagueName, homeName, awayName)
+
+			// Store sport in SurrealDB if available
+			if match.League != nil && match.League.Sport != nil {
+				sport := match.League.Sport
+				err := ck.surrealDB.StoreSport(sport)
+				if err != nil {
+					ck.logger.Error("Failed to store sport in SurrealDB:", err)
+				} else {
+					ck.logger.Info(fmt.Sprintf("Stored sport in SurrealDB: ID=%d, Name=%s",
+						sport.ID, sport.Name))
+				}
+			}
 		}
 		return
 	}
@@ -115,5 +147,11 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 }
 
 func (ck *ConsumerKafka) Stop() {
-	ck.consumer.Close()
+	if ck.consumer != nil {
+		ck.consumer.Close()
+	}
+
+	if ck.surrealDB != nil {
+		ck.surrealDB.Close()
+	}
 }

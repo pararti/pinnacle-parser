@@ -21,6 +21,13 @@ type Options struct {
 	KafkaPort    string `yaml:"kafkaPort,omitempty"`
 	Login        string `yaml:"login,omitempty"`
 	Password     string `yaml:"password,omitempty"`
+
+	// SurrealDB configuration
+	SurrealDBAddress   string `yaml:"surrealDBAddress,omitempty"`
+	SurrealDBUsername  string `yaml:"surrealDBUsername,omitempty"`
+	SurrealDBPassword  string `yaml:"surrealDBPassword,omitempty"`
+	SurrealDBNamespace string `yaml:"surrealDBNamespace,omitempty"`
+	SurrealDBDatabase  string `yaml:"surrealDBDatabase,omitempty"`
 }
 
 func NewOptions() (*Options, error) {
@@ -45,4 +52,9 @@ func (o *Options) fillDefaultValues() {
 	o.Site = site
 	o.KafkaAddress = "localhost"
 	o.KafkaPort = "9092"
+	o.SurrealDBAddress = "ws://localhost:8000/rpc"
+	o.SurrealDBUsername = "root"
+	o.SurrealDBPassword = "root"
+	o.SurrealDBNamespace = "betty"
+	o.SurrealDBDatabase = "test"
 }
