@@ -93,6 +93,15 @@ type QueryResult[T any] struct {
 	Result T      `json:"result"`
 }
 
+// MatchRecord represents a match record in SurrealDB
+type MatchRecord struct {
+	ID        models.RecordID       `json:"id"`
+	BestOfX   int                   `json:"bestOfX"`
+	IsLive    bool                  `json:"isLive"`
+	StartTime models.CustomDateTime `json:"startTime"`
+	ParentId  int                   `json:"parentId,omitempty"`
+}
+
 // StoreSport stores a sport in SurrealDB, ensuring it's unique by ID and name
 // It uses RecordID to identify the specific record and Upsert to create or update it
 func (s *SurrealDBClient) StoreSport(sport *parsed.Sport) error {
@@ -237,6 +246,112 @@ func (s *SurrealDBClient) StoreParticipants(participants []*parsed.Participant) 
 	}
 
 	return createdRecords, nil
+}
+
+// StoreMatch stores a complete match in SurrealDB, along with its relationships to league and participants
+func (s *SurrealDBClient) StoreMatch(match *parsed.Match) error {
+	if match == nil {
+		return fmt.Errorf("cannot store nil match")
+	}
+
+	if match.League == nil {
+		return fmt.Errorf("match must have an associated league")
+	}
+
+	if len(match.Participants) == 0 {
+		return fmt.Errorf("match must have at least one participant")
+	}
+
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
+
+	// Debug the match data
+	s.logger.Info(fmt.Sprintf("Attempting to store match: ID=%d, BestOfX=%d, IsLive=%t",
+		match.ID, match.BestOfX, match.IsLive))
+
+	// First, ensure sport and league are stored
+	if match.League.Sport != nil {
+		err := s.StoreSport(match.League.Sport)
+		if err != nil {
+			return fmt.Errorf("failed to store sport for match: %w", err)
+		}
+	}
+
+	err := s.StoreLeague(match.League)
+	if err != nil {
+		return fmt.Errorf("failed to store league for match: %w", err)
+	}
+
+	// Next, store participants
+	participants, err := s.StoreParticipants(match.Participants)
+	if err != nil {
+		return fmt.Errorf("failed to store participants for match: %w", err)
+	}
+
+	// Create record ID for the match
+	matchRecordID := models.NewRecordID("matches", match.ID)
+
+	// Convert time.Time to models.CustomDateTime
+	customStartTime := models.CustomDateTime{Time: match.StartTime}
+
+	// Create a MatchRecord from the parsed.Match
+	matchRecord := MatchRecord{
+		ID:        matchRecordID,
+		BestOfX:   match.BestOfX,
+		IsLive:    match.IsLive,
+		StartTime: customStartTime,
+		ParentId:  match.ParentId,
+	}
+
+	// Upsert the match record
+	_, err = surrealdb.Upsert[MatchRecord](s.db.WithContext(ctx), matchRecordID, matchRecord)
+	if err != nil {
+		s.logger.Info(fmt.Sprintf("Error storing match: %v", err))
+		return fmt.Errorf("failed to store match: %w", err)
+	}
+
+	// Create a relationship between match and league
+	leagueRecordID := models.NewRecordID("leagues", match.League.ID)
+	leagueRelation := &surrealdb.Relationship{
+		In:       leagueRecordID,             // The target node (league)
+		Out:      matchRecordID,              // The source node (match)
+		Relation: models.Table("belongs_to"), // The edge type
+		Data: map[string]any{
+			"created_at": customStartTime,
+		},
+	}
+
+	// Create the relationship using InsertRelation
+	err = surrealdb.InsertRelation(s.db.WithContext(ctx), leagueRelation)
+	if err != nil {
+		s.logger.Info(fmt.Sprintf("Error creating relationship between match and league: %v", err))
+		return fmt.Errorf("failed to create match-league relationship: %w", err)
+	}
+
+	// Create relationships between match and participants
+	for i, participant := range participants {
+		participantRelation := &surrealdb.Relationship{
+			In:       participant.ID,                  // The target node (participant)
+			Out:      matchRecordID,                   // The source node (match)
+			Relation: models.Table("has_participant"), // The edge type
+			Data: map[string]any{
+				"created_at": customStartTime,
+				"order":      i, // Store the order of participants (e.g., home/away)
+				"alignment":  match.Participants[i].Alignment,
+			},
+		}
+
+		// Create the relationship using InsertRelation
+		err = surrealdb.InsertRelation(s.db.WithContext(ctx), participantRelation)
+		if err != nil {
+			s.logger.Info(fmt.Sprintf("Error creating relationship between match and participant: %v", err))
+			return fmt.Errorf("failed to create match-participant relationship: %w", err)
+		}
+	}
+
+	s.logger.Info(fmt.Sprintf("Successfully stored match: ID=%d with %d participants",
+		match.ID, len(participants)))
+	return nil
 }
 
 // Close closes the connection to SurrealDB

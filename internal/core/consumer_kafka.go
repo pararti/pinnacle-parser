@@ -110,7 +110,7 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 		fmt.Printf("Source: %s\n", matchMsg.Source)
 		fmt.Printf("Number of matches: %d\n", len(matchMsg.Data))
 
-		// Process each match and store its sport and league in SurrealDB
+		// Process each match and store it in SurrealDB
 		for i, match := range matchMsg.Data {
 			// Extract participant names for home and away
 			var homeName, awayName string
@@ -127,39 +127,15 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 			fmt.Printf("Match #%d: ID=%d, League=%s, Home=%s, Away=%s\n",
 				i+1, match.ID, leagueName, homeName, awayName)
 
-			// Store sport in SurrealDB if available
-			if match.League != nil && match.League.Sport != nil {
-				sport := match.League.Sport
-				err := ck.surrealDB.StoreSport(sport)
-				if err != nil {
-					ck.logger.Error("Failed to store sport in SurrealDB:", err)
-				} else {
-					ck.logger.Info(fmt.Sprintf("Stored sport in SurrealDB: ID=%d, Name=%s",
-						sport.ID, sport.Name))
-				}
-
-				// Store league in SurrealDB
-				league := match.League
-				err = ck.surrealDB.StoreLeague(league)
-				if err != nil {
-					ck.logger.Error("Failed to store league in SurrealDB:", err)
-				} else {
-					ck.logger.Info(fmt.Sprintf("Stored league in SurrealDB: ID=%d, Name=%s",
-						league.ID, league.Name))
-				}
-			}
-
-			// Store participants in SurrealDB
-			if len(match.Participants) > 0 {
-				createdParticipants, err := ck.surrealDB.StoreParticipants(match.Participants)
-				if err != nil {
-					ck.logger.Error("Failed to store participants in SurrealDB:", err)
-				} else {
-					ck.logger.Info(fmt.Sprintf("Successfully stored %d participants", len(createdParticipants)))
-					// Here you can use the createdParticipants for further processing if needed
-				}
+			// Store the complete match in SurrealDB
+			err := ck.surrealDB.StoreMatch(match)
+			if err != nil {
+				ck.logger.Error("Failed to store match in SurrealDB:", err)
+			} else {
+				ck.logger.Info(fmt.Sprintf("Successfully stored match in SurrealDB: ID=%d", match.ID))
 			}
 		}
+
 		return
 	}
 
