@@ -1,9 +1,8 @@
 package main
 
 import (
-	"github.com/pararti/pinnacle-parser/internal/core"
+	"github.com/pararti/pinnacle-parser/internal/consumer"
 	"github.com/pararti/pinnacle-parser/internal/options"
-	"github.com/pararti/pinnacle-parser/pkg/constants"
 	"github.com/pararti/pinnacle-parser/pkg/logger"
 )
 
@@ -19,6 +18,6 @@ func main() {
 	}
 
 	// Create and start the consumer
-	consumer := core.NewConsumerKafka(log, opts)
-	consumer.Start(constants.TOPIC)
+	c := consumer.NewConsumerKafka(log, opts)
+	c.Start(opts.KafkaTopic)
 }

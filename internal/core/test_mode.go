@@ -6,9 +6,12 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/pararti/pinnacle-parser/internal/options"
+
 	"github.com/pararti/pinnacle-parser/internal/abstruct"
 	"github.com/pararti/pinnacle-parser/internal/models/kafkadata"
 	"github.com/pararti/pinnacle-parser/internal/models/parsed"
+	"github.com/pararti/pinnacle-parser/internal/models/test"
 	"github.com/pararti/pinnacle-parser/pkg/constants"
 	"github.com/pararti/pinnacle-parser/pkg/logger"
 )
@@ -34,7 +37,7 @@ func NewTestMode(l *logger.Logger, s abstruct.Sender) *TestMode {
 	}
 }
 
-func (t *TestMode) Start(topic string) {
+func (t *TestMode) Start(opts *options.Options) {
 	if t.isRunning {
 		t.logger.Warn("Test mode is already running")
 		return
@@ -42,7 +45,7 @@ func (t *TestMode) Start(topic string) {
 
 	t.isRunning = true
 	t.logger.Info("Starting test mode - generating random matches")
-	t.logger.Info(fmt.Sprintf("Sending events to Kafka topic: %s", topic))
+	t.logger.Info(fmt.Sprintf("Sending events to Kafka topic: %s", opts.KafkaTopic))
 
 	// Start the main test loop
 	go func() {
@@ -55,7 +58,7 @@ func (t *TestMode) Start(topic string) {
 				t.logger.Info("Test mode stopped")
 				return
 			case <-ticker.C:
-				t.generateAndSendEvents(topic)
+				t.generateAndSendEvents(opts.KafkaTopic)
 			}
 		}
 	}()
@@ -75,22 +78,42 @@ func (t *TestMode) generateAndSendEvents(topic string) {
 	newMatches := make([]*parsed.Match, 0, newMatchCount)
 
 	for i := 0; i < newMatchCount; i++ {
-		match := parsed.GenerateExampleMatch()
+		match := test.GenerateExampleMatch()
+		if match == nil {
+			t.logger.Error("Failed to generate match")
+			continue
+		}
 		t.matches[match.ID] = match
 		t.bets[match.ID] = make(map[string]*parsed.Straight) // Initialize bets map for new match
 		newMatches = append(newMatches, match)
 		t.matchCount++
 
-		// Generate 1-3 bets for the new match
-		betCount := rand.Intn(3) + 1
-		newBets := make([]*parsed.Straight, 0, betCount)
-		for j := 0; j < betCount; j++ {
-			bet := parsed.GenerateExampleStraight(match.ID)
-			t.bets[match.ID][bet.Key] = bet
-			newBets = append(newBets, bet)
+		// Проверяем тип участников и собираем их ID если необходимо
+		isParticipantWithId := false
+		var participantIds []int
+
+		if match.Participants != nil && len(match.Participants) > 0 {
+			// Проверяем, есть ли у участников ID
+			for _, p := range match.Participants {
+				if p != nil && p.Id > 0 {
+					isParticipantWithId = true
+					participantIds = append(participantIds, p.Id)
+				}
+			}
 		}
 
-		// Send new bets
+		// Генерируем несколько ставок для нового матча
+		straights := test.GenerateExampleStraights(match.ID, isParticipantWithId, participantIds)
+		newBets := make([]*parsed.Straight, 0, len(straights))
+		for _, straight := range straights {
+			if straight == nil || straight.Key == "" {
+				continue
+			}
+			t.bets[match.ID][straight.Key] = straight
+			newBets = append(newBets, straight)
+		}
+
+		// Отправляем новые ставки
 		if len(newBets) > 0 {
 			data := kafkadata.Bet{
 				EventType: constants.BET_NEW,
@@ -104,7 +127,7 @@ func (t *TestMode) generateAndSendEvents(topic string) {
 		}
 	}
 
-	// Send new matches
+	// Отправляем новые матчи
 	if len(newMatches) > 0 {
 		data := kafkadata.Match{
 			EventType: constants.MATCH_NEW,
@@ -113,7 +136,7 @@ func (t *TestMode) generateAndSendEvents(topic string) {
 		}
 		if jsonData, err := json.Marshal(data); err == nil {
 			t.sender.Send(jsonData, &topic)
-			// Log details of each new match
+			// Логируем детали новых матчей
 			for _, match := range newMatches {
 				t.logger.Info(fmt.Sprintf("New match: ID=%d, Sport=%s, Teams=%s vs %s, StartTime=%s",
 					match.ID,
@@ -126,34 +149,72 @@ func (t *TestMode) generateAndSendEvents(topic string) {
 		}
 	}
 
-	// Generate updates for existing matches (30% chance per match)
+	// Генерируем обновления для существующих матчей
 	updates := make([]*parsed.Match, 0)
-	allBetUpdates := make([]*parsed.Straight, 0) // Changed to slice
+	allBetUpdates := make([]*parsed.Straight, 0)
 	deletions := make([]int, 0)
 
-	for id, match := range t.matches {
-		if rand.Float32() < 0.3 { // 30% chance to update match
-			delta := parsed.GenerateRandomMatchDelta(match)
-			updates = append(updates, delta)
+	// Выбираем случайные матчи для обновления
+	matchKeys := make([]int, 0, len(t.matches))
+	for id := range t.matches {
+		matchKeys = append(matchKeys, id)
+	}
+
+	// Перемешиваем ключи
+	rand.Shuffle(len(matchKeys), func(i, j int) {
+		matchKeys[i], matchKeys[j] = matchKeys[j], matchKeys[i]
+	})
+
+	// Обновляем 1-3 случайных матча
+	updateCount := rand.Intn(3) + 1
+	for i := 0; i < updateCount && i < len(matchKeys); i++ {
+		id := matchKeys[i]
+		match := t.matches[id]
+		if match == nil {
+			continue
 		}
 
-		// Update bets for this match (50% chance per bet)
-		for betKey, bet := range t.bets[id] {
-			if rand.Float32() < 0.5 { // 50% chance to update each bet
-				delta := parsed.GenerateRandomStraightDelta(bet)
-				t.bets[id][betKey] = delta // Update the bet in our map
-				allBetUpdates = append(allBetUpdates, delta)
+		// Обновляем матч
+		delta := test.GenerateRandomMatchDelta(match)
+		if delta != nil {
+			t.matches[id] = delta
+			updates = append(updates, delta)
+
+			// Проверяем тип участников и собираем их ID если необходимо
+			isParticipantWithId := false
+			var participantIds []int
+
+			if match.Participants != nil && len(match.Participants) > 0 {
+				// Проверяем, есть ли у участников ID
+				for _, p := range match.Participants {
+					if p != nil && p.Id > 0 {
+						isParticipantWithId = true
+						participantIds = append(participantIds, p.Id)
+					}
+				}
+			}
+
+			// Обновляем ставки для матча
+			if t.bets[id] != nil && len(t.bets[id]) > 0 {
+				straightDeltas := test.GenerateRandomStraightDeltas(t.bets[id], isParticipantWithId, participantIds)
+				for key, straightDelta := range straightDeltas {
+					if straightDelta != nil {
+						t.bets[id][key] = straightDelta
+						allBetUpdates = append(allBetUpdates, straightDelta)
+					}
+				}
 			}
 		}
 
-		if rand.Float32() < 0.05 { // 5% chance to delete
+		// Небольшой шанс удаления матча
+		if rand.Float32() < 0.05 { // 5% шанс удаления
 			deletions = append(deletions, id)
 			delete(t.matches, id)
-			delete(t.bets, id) // Also delete associated bets
+			delete(t.bets, id)
 		}
 	}
 
-	// Send bet updates
+	// Отправляем обновления ставок
 	if len(allBetUpdates) > 0 {
 		data := kafkadata.BetUpd{
 			EventType: constants.BET_UPDATE,
@@ -166,7 +227,7 @@ func (t *TestMode) generateAndSendEvents(topic string) {
 		}
 	}
 
-	// Send match updates
+	// Отправляем обновления матчей
 	if len(updates) > 0 {
 		data := kafkadata.MatchUpd{
 			EventType: constants.MATCH_UPDATE,
@@ -175,7 +236,7 @@ func (t *TestMode) generateAndSendEvents(topic string) {
 		}
 		if jsonData, err := json.Marshal(data); err == nil {
 			t.sender.Send(jsonData, &topic)
-			// Log details of each update
+			// Логируем детали обновлений
 			for _, update := range updates {
 				changes := make([]string, 0)
 				for field := range update.Changes {
@@ -186,7 +247,7 @@ func (t *TestMode) generateAndSendEvents(topic string) {
 		}
 	}
 
-	// Send deletions
+	// Отправляем удаления
 	if len(deletions) > 0 {
 		data := kafkadata.DeletedMatch{
 			EventType: constants.MATCH_DELETE,

@@ -19,6 +19,7 @@ type Options struct {
 	TestMode     bool   `yaml:"testMode,omitempty"`
 	KafkaAddress string `yaml:"kafkaAddress,omitempty"`
 	KafkaPort    string `yaml:"kafkaPort,omitempty"`
+	KafkaTopic   string `yaml:"kafkaTopic,omitempty"`
 	Login        string `yaml:"login,omitempty"`
 	Password     string `yaml:"password,omitempty"`
 
