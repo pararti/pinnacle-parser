@@ -12,19 +12,19 @@ var exampleSports = []struct {
 	id   int
 	name string
 }{
-	{1, "Soccer"},
-	{2, "Basketball"},
-	{3, "Tennis"},
-	{4, "Hockey"},
-	{5, "Baseball"},
-	{6, "Volleyball"},
+	//{1, "Soccer"},
+	//{2, "Basketball"},
+	//{3, "Tennis"},
+	//{4, "Hockey"},
+	//{5, "Baseball"},
+	//{6, "Volleyball"},
 	{7, "eSports"},
-	{8, "Cricket"},
-	{9, "Golf"},
-	{10, "American Football"},
-	{11, "Rugby"},
-	{12, "Handball"},
-	{13, "Water Polo"},
+	//{8, "Cricket"},
+	//{9, "Golf"},
+	//{10, "American Football"},
+	//{11, "Rugby"},
+	//{12, "Handball"},
+	//{13, "Water Polo"},
 }
 
 // Example team names for generating random participants

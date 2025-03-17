@@ -1,13 +1,12 @@
 package consumer
 
 import (
-	"encoding/json"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/pararti/pinnacle-parser/internal/models/kafkadata"
 	"github.com/pararti/pinnacle-parser/internal/options"
@@ -36,18 +35,18 @@ func NewConsumerKafka(l *logger.Logger, opts *options.Options) *ConsumerKafka {
 	// Создаем потребителя Kafka
 	consumer, err := kafka.NewConsumer(config)
 	if err != nil {
-		l.Fatal(fmt.Sprintf("Failed to create consumer: %s", err))
+		l.Fatal("Failed to create consumer", err)
 	}
 
 	// Подключаемся к PostgreSQL
 	postgresDB, err := consdb.NewPostgresDBClient(opts.DbConnection, l)
 	if err != nil {
-		l.Fatal(fmt.Sprintf("Failed to connect to PostgreSQL: %s", err))
-		consumer.Close()
+		l.Fatal("Failed to connect to PostgreSQL", err)
+		_ = consumer.Close()
 		os.Exit(1)
 	}
 
-	l.Info(fmt.Sprintf("Successfully connected to Kafka brokers: %s", opts.KafkaTopic))
+	l.Info("Successfully connected to Kafka brokers", opts.KafkaTopic)
 
 	return &ConsumerKafka{
 		logger:     l,
@@ -60,10 +59,10 @@ func (ck *ConsumerKafka) Start(topic string) {
 	// Подписываемся на топик
 	err := ck.consumer.SubscribeTopics([]string{topic}, nil)
 	if err != nil {
-		ck.logger.Fatal(fmt.Sprintf("Failed to subscribe to topic %s: %s", topic, err))
+		ck.logger.Fatal("Failed to subscribe to topic %s", topic, err)
 	}
 
-	ck.logger.Info(fmt.Sprintf("Subscribed to Kafka topic: %s", topic))
+	ck.logger.Info("Subscribed to Kafka topic", topic)
 
 	// Канал для сигналов остановки
 	sigchan := make(chan os.Signal, 1)
@@ -76,7 +75,7 @@ func (ck *ConsumerKafka) Start(topic string) {
 	for run {
 		select {
 		case sig := <-sigchan:
-			ck.logger.Info(fmt.Sprintf("Caught signal %v: terminating", sig))
+			ck.logger.Info("Caught signal terminating", sig)
 			run = false
 		default:
 			// Читаем сообщение с таймаутом
@@ -86,13 +85,13 @@ func (ck *ConsumerKafka) Start(topic string) {
 				if e, ok := err.(kafka.Error); ok && e.Code() == kafka.ErrTimedOut {
 					continue
 				}
-				ck.logger.Error(fmt.Sprintf("Failed to read message: %s", err))
+				ck.logger.Error("Failed to read message:", err)
 				continue
 			}
 
 			// Обрабатываем сообщение
-			ck.logger.Info(fmt.Sprintf("Received message: topic=%s, partition=%d, offset=%d",
-				*msg.TopicPartition.Topic, msg.TopicPartition.Partition, msg.TopicPartition.Offset))
+			ck.logger.Info("Received message",
+				*msg.TopicPartition.Topic, msg.TopicPartition.Partition, msg.TopicPartition.Offset)
 
 			ck.processMessage(msg.Value)
 		}
@@ -102,11 +101,11 @@ func (ck *ConsumerKafka) Start(topic string) {
 func (ck *ConsumerKafka) processMessage(data []byte) {
 	// Сначала проверяем, если это сообщение о новых матчах
 	var matchData kafkadata.Match
-	if err := json.Unmarshal(data, &matchData); err == nil && matchData.EventType == constants.MATCH_NEW {
-		ck.logger.Info(fmt.Sprintf("Processing %d new matches", len(matchData.Data)))
+	if err := sonic.Unmarshal(data, &matchData); err == nil && matchData.EventType == constants.MATCH_NEW {
+		ck.logger.Info("Processing new matches", len(matchData.Data))
 		for _, match := range matchData.Data {
 			if err := ck.postgresDB.StoreMatch(match); err != nil {
-				ck.logger.Error(fmt.Sprintf("Failed to store match %d: %s", match.ID, err))
+				ck.logger.Error("Failed to store match", match.ID, err)
 			}
 		}
 		return
@@ -114,11 +113,11 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 
 	// Проверяем, если это сообщение об обновлении матчей
 	var matchUpdData kafkadata.MatchUpd
-	if err := json.Unmarshal(data, &matchUpdData); err == nil && matchUpdData.EventType == constants.MATCH_UPDATE {
-		ck.logger.Info(fmt.Sprintf("Processing %d match updates", len(matchUpdData.Data)))
+	if err := sonic.Unmarshal(data, &matchUpdData); err == nil && matchUpdData.EventType == constants.MATCH_UPDATE {
+		ck.logger.Info("Processing match updates", len(matchUpdData.Data))
 		for _, match := range matchUpdData.Data {
 			if err := ck.postgresDB.StoreMatch(match); err != nil {
-				ck.logger.Error(fmt.Sprintf("Failed to update match %d: %s", match.ID, err))
+				ck.logger.Error("Failed to update match", match.ID, err)
 			}
 		}
 		return
@@ -126,11 +125,11 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 
 	// Проверяем, если это сообщение об удалении матчей
 	var matchDelData kafkadata.DeletedMatch
-	if err := json.Unmarshal(data, &matchDelData); err == nil && matchDelData.EventType == constants.MATCH_DELETE {
-		ck.logger.Info(fmt.Sprintf("Processing %d match deletions", len(matchDelData.Data)))
+	if err := sonic.Unmarshal(data, &matchDelData); err == nil && matchDelData.EventType == constants.MATCH_DELETE {
+		ck.logger.Info("Processing match deletions", len(matchDelData.Data))
 		for _, matchID := range matchDelData.Data {
 			if err := ck.postgresDB.DeleteMatch(matchID); err != nil {
-				ck.logger.Error(fmt.Sprintf("Failed to delete match %d: %s", matchID, err))
+				ck.logger.Error("Failed to delete match", matchID, err)
 			}
 		}
 		return
@@ -138,11 +137,11 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 
 	// Проверяем, если это сообщение о новых ставках
 	var betData kafkadata.Bet
-	if err := json.Unmarshal(data, &betData); err == nil && betData.EventType == constants.BET_NEW {
-		ck.logger.Info(fmt.Sprintf("Processing %d new bets", len(betData.Data)))
+	if err := sonic.Unmarshal(data, &betData); err == nil && betData.EventType == constants.BET_NEW {
+		ck.logger.Info("Processing new bets", len(betData.Data))
 		for _, straight := range betData.Data {
 			if err := ck.postgresDB.StoreStraight(straight); err != nil {
-				ck.logger.Error(fmt.Sprintf("Failed to store bet %s: %s", straight.Key, err))
+				ck.logger.Error("Failed to store bet", straight.Key, err)
 			}
 		}
 		return
@@ -150,11 +149,11 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 
 	// Проверяем, если это сообщение об обновлении ставок
 	var betUpdData kafkadata.BetUpd
-	if err := json.Unmarshal(data, &betUpdData); err == nil && betUpdData.EventType == constants.BET_UPDATE {
-		ck.logger.Info(fmt.Sprintf("Processing %d bet updates", len(betUpdData.Data)))
+	if err := sonic.Unmarshal(data, &betUpdData); err == nil && betUpdData.EventType == constants.BET_UPDATE {
+		ck.logger.Info("Processing %d bet updates", len(betUpdData.Data))
 		for _, straight := range betUpdData.Data {
 			if err := ck.postgresDB.StoreStraight(straight); err != nil {
-				ck.logger.Error(fmt.Sprintf("Failed to update bet %s: %s", straight.Key, err))
+				ck.logger.Error("Failed to update bet", straight.Key, err)
 			}
 		}
 		return
@@ -168,14 +167,14 @@ func (ck *ConsumerKafka) Stop() {
 	// Закрываем соединение с PostgreSQL
 	if ck.postgresDB != nil {
 		if err := ck.postgresDB.Close(); err != nil {
-			ck.logger.Error(fmt.Sprintf("Error closing PostgreSQL connection: %s", err))
+			ck.logger.Error("Error closing PostgreSQL connection", err)
 		}
 	}
 
 	// Закрываем соединение с Kafka
 	if ck.consumer != nil {
 		if err := ck.consumer.Close(); err != nil {
-			ck.logger.Error(fmt.Sprintf("Error closing Kafka consumer: %s", err))
+			ck.logger.Error("Error closing Kafka consumer", err)
 		}
 	}
 
