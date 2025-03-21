@@ -75,9 +75,10 @@ type TeamRecord struct {
 	Name string `json:"name"`
 }
 
-// ParticipantRecord представляет запись участника в базе данных
-type ParticipantRecord struct {
+// MatchParticipantRecord представляет запись участника матча в базе данных
+type MatchParticipantRecord struct {
 	ID        int    `json:"id"`
+	MatchID   int    `json:"match_id"`
 	TeamID    int    `json:"team_id"`
 	Alignment string `json:"alignment"`
 }
@@ -190,12 +191,12 @@ func (p *PostgresDBClient) FindOrCreateTeam(part *parsed.Participant) (int, erro
 	}
 
 	// Сначала пытаемся найти команду
-	query := `SELECT id FROM participants WHERE name = $1 AND alignment = $2 LIMIT 1`
+	query := `SELECT id FROM teams WHERE name = $1 LIMIT 1`
 
-	var participantId int
-	err := p.db.QueryRowContext(p.ctx, query, part.Name, part.Alignment).Scan(&participantId)
+	var teamId int
+	err := p.db.QueryRowContext(p.ctx, query, part.Name).Scan(&teamId)
 	if err == nil {
-		return participantId, nil
+		return teamId, nil
 	}
 
 	if err != sql.ErrNoRows {
@@ -203,14 +204,14 @@ func (p *PostgresDBClient) FindOrCreateTeam(part *parsed.Participant) (int, erro
 	}
 
 	// Если команда не найдена, создаем новую
-	insertQuery := `INSERT INTO participants (name, alignment) VALUES ($1, $2) RETURNING id`
+	insertQuery := `INSERT INTO teams (name) VALUES ($1) RETURNING id`
 
-	err = p.db.QueryRowContext(p.ctx, insertQuery, part.Name, part.Alignment).Scan(participantId)
+	err = p.db.QueryRowContext(p.ctx, insertQuery, part.Name).Scan(&teamId)
 	if err != nil {
 		return 0, err
 	}
 
-	return participantId, nil
+	return teamId, nil
 }
 
 // StoreParticipants сохраняет участников матча в базе данных
@@ -243,7 +244,7 @@ func (p *PostgresDBClient) StoreParticipants(matchID int, participants []*parsed
 		}
 
 		// Находим или создаем команду
-		pId, err := p.FindOrCreateTeam(participant)
+		teamId, err := p.FindOrCreateTeam(participant)
 		if err != nil {
 			return err
 		}
@@ -251,9 +252,10 @@ func (p *PostgresDBClient) StoreParticipants(matchID int, participants []*parsed
 		// Создаем связь матч-участник
 		_, err = tx.ExecContext(
 			p.ctx,
-			"INSERT INTO match_participants (match_id, participant_id) VALUES ($1, $2)",
+			"INSERT INTO match_participants (match_id, team_id, alignment) VALUES ($1, $2, $3)",
 			matchID,
-			pId,
+			teamId,
+			participant.Alignment,
 		)
 		if err != nil {
 			return err

@@ -18,11 +18,10 @@ CREATE TABLE IF NOT EXISTS leagues (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create participants table (teams)
-CREATE TABLE IF NOT EXISTS participants (
+-- Create teams table
+CREATE TABLE IF NOT EXISTS teams (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
-    alignment VARCHAR(50) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -38,12 +37,13 @@ CREATE TABLE IF NOT EXISTS matches (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create match_participants table (junction table for matches and participants)
+-- Create match_participants table (junction table for matches and teams)
 CREATE TABLE IF NOT EXISTS match_participants (
+    id SERIAL PRIMARY KEY,
     match_id INTEGER REFERENCES matches(id) ON DELETE CASCADE,
-    participant_id INTEGER REFERENCES participants(id) ON DELETE CASCADE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (match_id, participant_id)
+    team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+    alignment VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Create straights table (bets)
@@ -75,7 +75,7 @@ CREATE INDEX IF NOT EXISTS idx_leagues_sport_id ON leagues(sport_id);
 CREATE INDEX IF NOT EXISTS idx_matches_league_id ON matches(league_id);
 CREATE INDEX IF NOT EXISTS idx_matches_parent_id ON matches(parent_id);
 CREATE INDEX IF NOT EXISTS idx_match_participants_match_id ON match_participants(match_id);
-CREATE INDEX IF NOT EXISTS idx_match_participants_participant_id ON match_participants(participant_id);
+CREATE INDEX IF NOT EXISTS idx_match_participants_team_id ON match_participants(team_id);
 CREATE INDEX IF NOT EXISTS idx_straights_matchup_id ON straights(matchup_id);
 CREATE INDEX IF NOT EXISTS idx_prices_straight_id ON prices(straight_id);
 CREATE INDEX IF NOT EXISTS idx_prices_participant_id ON prices(participant_id);
