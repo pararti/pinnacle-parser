@@ -50,6 +50,7 @@ services:
       POSTGRES_DB: postgres
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       default:
         ipv4_address: 172.20.0.4
@@ -98,6 +99,30 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+      
+  parser:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: parser
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./config:/config
+
+  consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile.consumer
+    container_name: consumer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./config:/config
 
 volumes:
   postgres-data:
