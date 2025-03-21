@@ -46,8 +46,8 @@ CREATE TABLE IF NOT EXISTS match_participants (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create straights table (bets)
-CREATE TABLE IF NOT EXISTS straights (
+-- Create odds table 
+CREATE TABLE IF NOT EXISTS odds (
     id SERIAL PRIMARY KEY,
     key VARCHAR(255) NOT NULL,
     matchup_id INTEGER NOT NULL,
@@ -55,18 +55,19 @@ CREATE TABLE IF NOT EXISTS straights (
     side VARCHAR(50),
     status VARCHAR(50) NOT NULL,
     type VARCHAR(50) NOT NULL,
+    designation VARCHAR(50) NOT NULL,
+    points DOUBLE PRECISION,
+    participant_id INTEGER,
+    latest_price INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create prices table
-CREATE TABLE IF NOT EXISTS prices (
+-- Create price_values table
+CREATE TABLE IF NOT EXISTS price_values (
     id SERIAL PRIMARY KEY,
-    straight_id INTEGER NOT NULL REFERENCES straights(id) ON DELETE CASCADE,
-    designation VARCHAR(50) NOT NULL,
-    price INTEGER NOT NULL,
-    points DOUBLE PRECISION,
-    participant_id INTEGER,
+    odd_id INTEGER NOT NULL REFERENCES odds(id) ON DELETE CASCADE,
+    value INTEGER NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -76,6 +77,6 @@ CREATE INDEX IF NOT EXISTS idx_matches_league_id ON matches(league_id);
 CREATE INDEX IF NOT EXISTS idx_matches_parent_id ON matches(parent_id);
 CREATE INDEX IF NOT EXISTS idx_match_participants_match_id ON match_participants(match_id);
 CREATE INDEX IF NOT EXISTS idx_match_participants_team_id ON match_participants(team_id);
-CREATE INDEX IF NOT EXISTS idx_straights_matchup_id ON straights(matchup_id);
-CREATE INDEX IF NOT EXISTS idx_prices_straight_id ON prices(straight_id);
-CREATE INDEX IF NOT EXISTS idx_prices_participant_id ON prices(participant_id);
+CREATE INDEX IF NOT EXISTS idx_odds_matchup_id ON odds(matchup_id);
+CREATE INDEX IF NOT EXISTS idx_price_values_odd_id ON price_values(odd_id);
+CREATE INDEX IF NOT EXISTS idx_odds_participant_id ON odds(participant_id);

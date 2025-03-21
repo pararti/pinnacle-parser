@@ -114,6 +114,29 @@ type PriceRecord struct {
 	ParticipantID int     `json:"participant_id"`
 }
 
+// OddRecord представляет запись коэффициента в базе данных
+type OddRecord struct {
+	ID            int     `json:"id"`
+	Key           string  `json:"key"`
+	MatchupID     int     `json:"matchup_id"`
+	Period        int     `json:"period"`
+	Side          string  `json:"side"`
+	Status        string  `json:"status"`
+	Type          string  `json:"type"`
+	Designation   string  `json:"designation"`
+	Points        float64 `json:"points"`
+	ParticipantID int     `json:"participant_id"`
+	LatestPrice   int     `json:"latest_price"`
+}
+
+// PriceValueRecord представляет запись значения цены в базе данных
+type PriceValueRecord struct {
+	ID        int       `json:"id"`
+	OddID     int       `json:"odd_id"`
+	Value     int       `json:"value"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // StoreSport сохраняет вид спорта в базе данных
 func (p *PostgresDBClient) StoreSport(sport *parsed.Sport) error {
 	if sport == nil {
@@ -378,91 +401,95 @@ func (p *PostgresDBClient) StoreStraight(straight *parsed.Straight) error {
 		}
 	}()
 
-	// Проверяем, существует ли ставка
-	var straightID int
-	err = tx.QueryRowContext(
-		p.ctx,
-		"SELECT id FROM straights WHERE key = $1 AND matchup_id = $2",
-		straight.Key,
-		straight.MatchupID,
-	).Scan(&straightID)
+	// Для каждой цены создаем отдельную запись odd
+	for _, price := range straight.Prices {
+		if price == nil {
+			continue
+		}
 
-	if err != nil && err != sql.ErrNoRows {
-		return err
-	}
-
-	if err == sql.ErrNoRows {
-		// Создаем новую ставку
-		query := `
-			INSERT INTO straights (key, matchup_id, period, side, status, type)
-			VALUES ($1, $2, $3, $4, $5, $6)
-			RETURNING id
-		`
+		// Проверяем, существует ли odd
+		var oddID int
 		err = tx.QueryRowContext(
 			p.ctx,
-			query,
+			`SELECT id FROM odds WHERE key = $1 AND matchup_id = $2 AND 
+			period = $3 AND side = $4 AND type = $5 AND designation = $6 AND 
+			(participant_id = $7 OR (participant_id IS NULL AND $7 IS NULL))`,
 			straight.Key,
 			straight.MatchupID,
 			straight.Period,
 			straight.Side,
-			straight.Status,
 			straight.Type,
-		).Scan(&straightID)
-	} else {
-		// Обновляем существующую ставку
-		query := `
-			UPDATE straights SET 
-				period = $1, 
-				side = $2, 
-				status = $3, 
-				type = $4
-			WHERE id = $5
-		`
-		_, err = tx.ExecContext(
-			p.ctx,
-			query,
-			straight.Period,
-			straight.Side,
-			straight.Status,
-			straight.Type,
-			straightID,
-		)
-	}
+			price.Designation,
+			price.ParticipantId,
+		).Scan(&oddID)
 
-	if err != nil {
-		return err
-	}
-
-	// Обновляем цены
-	if straight.Prices != nil && len(straight.Prices) > 0 {
-		// Удаляем существующие цены
-		_, err = tx.ExecContext(p.ctx, "DELETE FROM prices WHERE straight_id = $1", straightID)
-		if err != nil {
+		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
 
-		// Добавляем новые цены
-		for _, price := range straight.Prices {
-			if price == nil {
-				continue
-			}
-
+		if err == sql.ErrNoRows {
+			// Создаем новый odd
 			query := `
-				INSERT INTO prices (straight_id, designation, price, points, participant_id)
-				VALUES ($1, $2, $3, $4, $5)
+				INSERT INTO odds (key, matchup_id, period, side, status, type, designation, points, participant_id, latest_price)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+				RETURNING id
+			`
+			err = tx.QueryRowContext(
+				p.ctx,
+				query,
+				straight.Key,
+				straight.MatchupID,
+				straight.Period,
+				straight.Side,
+				straight.Status,
+				straight.Type,
+				price.Designation,
+				price.Points,
+				price.ParticipantId,
+				price.Price,
+			).Scan(&oddID)
+		} else {
+			// Обновляем существующий odd
+			query := `
+				UPDATE odds SET 
+					period = $1, 
+					side = $2, 
+					status = $3, 
+					type = $4,
+					points = $5,
+					latest_price = $6
+				WHERE id = $7
 			`
 			_, err = tx.ExecContext(
 				p.ctx,
 				query,
-				straightID,
-				price.Designation,
-				price.Price,
+				straight.Period,
+				straight.Side,
+				straight.Status,
+				straight.Type,
 				price.Points,
-				price.ParticipantId,
+				price.Price,
+				oddID,
 			)
-			if err != nil {
-				return err
-			}
+		}
+
+		if err != nil {
+			return err
+		}
+
+		// Добавляем новую запись цены
+		query := `
+			INSERT INTO price_values (odd_id, value)
+			VALUES ($1, $2)
+		`
+		_, err = tx.ExecContext(
+			p.ctx,
+			query,
+			oddID,
+			price.Price,
+		)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -486,22 +513,22 @@ func (p *PostgresDBClient) DeleteMatch(id int) error {
 		}
 	}()
 
-	// Удаляем связанные цены и ставки
-	straightsQuery := `SELECT id FROM straights WHERE matchup_id = $1`
-	rows, err := tx.QueryContext(p.ctx, straightsQuery, id)
+	// Получаем ID всех odds связанных с матчем
+	oddsQuery := `SELECT id FROM odds WHERE matchup_id = $1`
+	rows, err := tx.QueryContext(p.ctx, oddsQuery, id)
 	if err != nil {
 		return err
 	}
 
-	var straightIDs []interface{}
+	var oddIDs []interface{}
 	var i int
 	for rows.Next() {
-		var straightID int
-		if err := rows.Scan(&straightID); err != nil {
+		var oddID int
+		if err := rows.Scan(&oddID); err != nil {
 			rows.Close()
 			return err
 		}
-		straightIDs = append(straightIDs, straightID)
+		oddIDs = append(oddIDs, oddID)
 		i++
 	}
 	rows.Close()
@@ -510,22 +537,22 @@ func (p *PostgresDBClient) DeleteMatch(id int) error {
 		return err
 	}
 
-	// Удаляем цены для всех ставок
-	if len(straightIDs) > 0 {
-		placeholders := make([]string, len(straightIDs))
+	// Удаляем price_values для всех odds
+	if len(oddIDs) > 0 {
+		placeholders := make([]string, len(oddIDs))
 		for i := range placeholders {
 			placeholders[i] = fmt.Sprintf("$%d", i+1)
 		}
 
-		priceQuery := fmt.Sprintf("DELETE FROM prices WHERE straight_id IN (%s)", strings.Join(placeholders, ","))
-		_, err = tx.ExecContext(p.ctx, priceQuery, straightIDs...)
+		priceValueQuery := fmt.Sprintf("DELETE FROM price_values WHERE odd_id IN (%s)", strings.Join(placeholders, ","))
+		_, err = tx.ExecContext(p.ctx, priceValueQuery, oddIDs...)
 		if err != nil {
 			return err
 		}
 
-		// Удаляем ставки
-		straightQuery := fmt.Sprintf("DELETE FROM straights WHERE id IN (%s)", strings.Join(placeholders, ","))
-		_, err = tx.ExecContext(p.ctx, straightQuery, straightIDs...)
+		// Удаляем odds
+		oddQuery := fmt.Sprintf("DELETE FROM odds WHERE id IN (%s)", strings.Join(placeholders, ","))
+		_, err = tx.ExecContext(p.ctx, oddQuery, oddIDs...)
 		if err != nil {
 			return err
 		}
