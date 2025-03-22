@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
-	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL драйвер
@@ -91,6 +89,7 @@ type MatchRecord struct {
 	StartTime time.Time `json:"start_time"`
 	ParentID  int       `json:"parent_id"`
 	LeagueID  int       `json:"league_id"`
+	Status    string    `json:"status"`
 }
 
 // StraightRecord представляет запись ставки в базе данных
@@ -500,7 +499,7 @@ func (p *PostgresDBClient) StoreStraight(straight *parsed.Straight) error {
 	return nil
 }
 
-// DeleteMatch удаляет матч и все связанные данные
+// DeleteMatch marks a match as deleted by updating its status
 func (p *PostgresDBClient) DeleteMatch(id int) error {
 	tx, err := p.db.BeginTx(p.ctx, nil)
 	if err != nil {
@@ -513,59 +512,24 @@ func (p *PostgresDBClient) DeleteMatch(id int) error {
 		}
 	}()
 
-	// Получаем ID всех odds связанных с матчем
-	oddsQuery := `SELECT id FROM odds WHERE matchup_id = $1`
-	rows, err := tx.QueryContext(p.ctx, oddsQuery, id)
+	// Update match status to 'deleted'
+	query := `
+		UPDATE matches 
+		SET status = 'deleted', updated_at = CURRENT_TIMESTAMP 
+		WHERE id = $1
+	`
+	_, err = tx.ExecContext(p.ctx, query, id)
 	if err != nil {
 		return err
 	}
 
-	var oddIDs []interface{}
-	var i int
-	for rows.Next() {
-		var oddID int
-		if err := rows.Scan(&oddID); err != nil {
-			rows.Close()
-			return err
-		}
-		oddIDs = append(oddIDs, oddID)
-		i++
-	}
-	rows.Close()
-
-	if err = rows.Err(); err != nil {
-		return err
-	}
-
-	// Удаляем price_values для всех odds
-	if len(oddIDs) > 0 {
-		placeholders := make([]string, len(oddIDs))
-		for i := range placeholders {
-			placeholders[i] = fmt.Sprintf("$%d", i+1)
-		}
-
-		priceValueQuery := fmt.Sprintf("DELETE FROM price_values WHERE odd_id IN (%s)", strings.Join(placeholders, ","))
-		_, err = tx.ExecContext(p.ctx, priceValueQuery, oddIDs...)
-		if err != nil {
-			return err
-		}
-
-		// Удаляем odds
-		oddQuery := fmt.Sprintf("DELETE FROM odds WHERE id IN (%s)", strings.Join(placeholders, ","))
-		_, err = tx.ExecContext(p.ctx, oddQuery, oddIDs...)
-		if err != nil {
-			return err
-		}
-	}
-
-	// Удаляем связи участников
-	_, err = tx.ExecContext(p.ctx, "DELETE FROM match_participants WHERE match_id = $1", id)
-	if err != nil {
-		return err
-	}
-
-	// Удаляем сам матч
-	_, err = tx.ExecContext(p.ctx, "DELETE FROM matches WHERE id = $1", id)
+	// Update related odds status to 'deleted'
+	oddsQuery := `
+		UPDATE odds 
+		SET status = 'deleted', updated_at = CURRENT_TIMESTAMP 
+		WHERE matchup_id = $1
+	`
+	_, err = tx.ExecContext(p.ctx, oddsQuery, id)
 	if err != nil {
 		return err
 	}
