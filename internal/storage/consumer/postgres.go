@@ -169,6 +169,7 @@ func (p *PostgresDBClient) StoreLeague(league *parsed.League) error {
 
 	// Убедимся, что Sport существует
 	if err := p.StoreSport(league.Sport); err != nil {
+		p.logger.Error("Failed to store sport", league.Sport.ID, err)
 		return err
 	}
 
@@ -200,9 +201,11 @@ func (p *PostgresDBClient) StoreLeague(league *parsed.League) error {
 	)
 
 	if err != nil {
+		p.logger.Error("Failed to execute league query", league.ID, err)
 		return err
 	}
 
+	p.logger.Info("Stored league: id=", league.ID, ", sportId=", league.Sport.ID)
 	return nil
 }
 
@@ -301,13 +304,27 @@ func (p *PostgresDBClient) StoreMatch(match *parsed.Match) error {
 		return errors.New("match.League is nil")
 	}
 
+	// Check if league.Sport is nil
+	if match.League.Sport == nil {
+		p.logger.Error("match.League.Sport is nil for match", match.ID)
+		return errors.New("match.League.Sport is nil")
+	}
+
+	// Log match details
+	p.logger.Info("Storing match: ID=", match.ID,
+		", League=", match.League.ID,
+		", Sport=", match.League.Sport.ID,
+		", Teams=", getTeamsString(match.Participants))
+
 	// Сохраняем лигу
 	if err := p.StoreLeague(match.League); err != nil {
+		p.logger.Error("Failed to store league for match", match.ID, err)
 		return err
 	}
 
 	tx, err := p.db.BeginTx(p.ctx, nil)
 	if err != nil {
+		p.logger.Error("Failed to begin transaction for match", match.ID, err)
 		return err
 	}
 
@@ -321,6 +338,7 @@ func (p *PostgresDBClient) StoreMatch(match *parsed.Match) error {
 	var exists bool
 	err = tx.QueryRowContext(p.ctx, "SELECT EXISTS(SELECT 1 FROM matches WHERE id = $1)", match.ID).Scan(&exists)
 	if err != nil {
+		p.logger.Error("Failed to check if match exists", match.ID, err)
 		return err
 	}
 
@@ -346,6 +364,11 @@ func (p *PostgresDBClient) StoreMatch(match *parsed.Match) error {
 			match.ParentId,
 			match.ID,
 		)
+		if err != nil {
+			p.logger.Error("Failed to update match", match.ID, err)
+		} else {
+			p.logger.Info("Updated match in database: ID=", match.ID)
+		}
 	} else {
 		// Создаем новый матч
 		query = `
@@ -362,6 +385,11 @@ func (p *PostgresDBClient) StoreMatch(match *parsed.Match) error {
 			match.StartTime,
 			match.ParentId,
 		)
+		if err != nil {
+			p.logger.Error("Failed to insert new match", match.ID, err)
+		} else {
+			p.logger.Info("Inserted new match in database: ID=", match.ID)
+		}
 	}
 
 	if err != nil {
@@ -369,6 +397,7 @@ func (p *PostgresDBClient) StoreMatch(match *parsed.Match) error {
 	}
 
 	if err = tx.Commit(); err != nil {
+		p.logger.Error("Failed to commit transaction for match", match.ID, err)
 		return err
 	}
 
@@ -376,11 +405,34 @@ func (p *PostgresDBClient) StoreMatch(match *parsed.Match) error {
 	if match.Participants != nil && len(match.Participants) > 0 {
 		err = p.StoreParticipants(match.ID, match.Participants)
 		if err != nil {
+			p.logger.Error("Failed to store participants for match", match.ID, err)
 			return err
 		}
+		p.logger.Info("Stored participants for match: ID=", match.ID, ", Count=", len(match.Participants))
+	} else {
+		p.logger.Warn("No participants to store for match", match.ID)
 	}
 
 	return nil
+}
+
+// Helper function to get teams string representation
+func getTeamsString(participants []*parsed.Participant) string {
+	if participants == nil || len(participants) == 0 {
+		return "no participants"
+	}
+
+	result := ""
+	for i, p := range participants {
+		if p == nil {
+			continue
+		}
+		if i > 0 {
+			result += " vs "
+		}
+		result += p.Name
+	}
+	return result
 }
 
 // StoreStraight сохраняет ставку в базе данных
@@ -503,6 +555,7 @@ func (p *PostgresDBClient) StoreStraight(straight *parsed.Straight) error {
 func (p *PostgresDBClient) DeleteMatch(id int) error {
 	tx, err := p.db.BeginTx(p.ctx, nil)
 	if err != nil {
+		p.logger.Error("Failed to begin transaction for deleting match", id, err)
 		return err
 	}
 
@@ -520,6 +573,7 @@ func (p *PostgresDBClient) DeleteMatch(id int) error {
 	`
 	_, err = tx.ExecContext(p.ctx, query, id)
 	if err != nil {
+		p.logger.Error("Failed to mark match as deleted", id, err)
 		return err
 	}
 
@@ -531,13 +585,16 @@ func (p *PostgresDBClient) DeleteMatch(id int) error {
 	`
 	_, err = tx.ExecContext(p.ctx, oddsQuery, id)
 	if err != nil {
+		p.logger.Error("Failed to mark odds as deleted for match", id, err)
 		return err
 	}
 
 	if err = tx.Commit(); err != nil {
+		p.logger.Error("Failed to commit transaction for deleting match", id, err)
 		return err
 	}
 
+	p.logger.Info("Successfully deleted match: ID=", id)
 	return nil
 }
 

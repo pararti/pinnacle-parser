@@ -103,11 +103,17 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 	var matchData kafkadata.Match
 	if err := sonic.Unmarshal(data, &matchData); err == nil && matchData.EventType == constants.MATCH_NEW {
 		ck.logger.Info("Processing new matches", len(matchData.Data))
+		successCount := 0
+		errorCount := 0
 		for _, match := range matchData.Data {
 			if err := ck.postgresDB.StoreMatch(match); err != nil {
 				ck.logger.Error("Failed to store match", match.ID, err)
+				errorCount++
+			} else {
+				successCount++
 			}
 		}
+		ck.logger.Info("Processed new matches: success=", successCount, " errors=", errorCount)
 		return
 	}
 
@@ -115,11 +121,17 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 	var matchUpdData kafkadata.MatchUpd
 	if err := sonic.Unmarshal(data, &matchUpdData); err == nil && matchUpdData.EventType == constants.MATCH_UPDATE {
 		ck.logger.Info("Processing match updates", len(matchUpdData.Data))
+		successCount := 0
+		errorCount := 0
 		for _, match := range matchUpdData.Data {
 			if err := ck.postgresDB.StoreMatch(match); err != nil {
 				ck.logger.Error("Failed to update match", match.ID, err)
+				errorCount++
+			} else {
+				successCount++
 			}
 		}
+		ck.logger.Info("Processed match updates: success=", successCount, " errors=", errorCount)
 		return
 	}
 
@@ -127,11 +139,17 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 	var matchDelData kafkadata.DeletedMatch
 	if err := sonic.Unmarshal(data, &matchDelData); err == nil && matchDelData.EventType == constants.MATCH_DELETE {
 		ck.logger.Info("Processing match deletions", len(matchDelData.Data))
+		successCount := 0
+		errorCount := 0
 		for _, matchID := range matchDelData.Data {
 			if err := ck.postgresDB.DeleteMatch(matchID); err != nil {
 				ck.logger.Error("Failed to delete match", matchID, err)
+				errorCount++
+			} else {
+				successCount++
 			}
 		}
+		ck.logger.Info("Processed match deletions: success=", successCount, " errors=", errorCount)
 		return
 	}
 
@@ -139,11 +157,17 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 	var betData kafkadata.Bet
 	if err := sonic.Unmarshal(data, &betData); err == nil && betData.EventType == constants.BET_NEW {
 		ck.logger.Info("Processing new bets", len(betData.Data))
+		successCount := 0
+		errorCount := 0
 		for _, straight := range betData.Data {
 			if err := ck.postgresDB.StoreStraight(straight); err != nil {
 				ck.logger.Error("Failed to store bet", straight.Key, err)
+				errorCount++
+			} else {
+				successCount++
 			}
 		}
+		ck.logger.Info("Processed new bets: success=", successCount, " errors=", errorCount)
 		return
 	}
 
@@ -151,11 +175,17 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 	var betUpdData kafkadata.BetUpd
 	if err := sonic.Unmarshal(data, &betUpdData); err == nil && betUpdData.EventType == constants.BET_UPDATE {
 		ck.logger.Info("Processing %d bet updates", len(betUpdData.Data))
+		successCount := 0
+		errorCount := 0
 		for _, straight := range betUpdData.Data {
 			if err := ck.postgresDB.StoreStraight(straight); err != nil {
 				ck.logger.Error("Failed to update bet", straight.Key, err)
+				errorCount++
+			} else {
+				successCount++
 			}
 		}
+		ck.logger.Info("Processed bet updates: success=", successCount, " errors=", errorCount)
 		return
 	}
 
