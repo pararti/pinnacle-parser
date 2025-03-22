@@ -8,6 +8,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL драйвер
 	"github.com/pararti/pinnacle-parser/internal/models/parsed"
+	"github.com/pararti/pinnacle-parser/pkg/jsonpatch"
 	"github.com/pararti/pinnacle-parser/pkg/logger"
 )
 
@@ -294,8 +295,134 @@ func (p *PostgresDBClient) StoreParticipants(matchID int, participants []*parsed
 	return nil
 }
 
+// GetMatchByID retrieves a match by ID including its League and Sport data
+func (p *PostgresDBClient) GetMatchByID(matchID int) (*parsed.Match, error) {
+	query := `
+		SELECT m.id, m.best_of_x, m.is_live, m.start_time, m.parent_id,
+			l.id, l.name, l.group_name, l.is_hidden, l.is_promoted, l.is_sticky, l.sequence,
+			s.id, s.name
+		FROM matches m
+		JOIN leagues l ON m.league_id = l.id
+		JOIN sports s ON l.sport_id = s.id
+		WHERE m.id = $1
+	`
+
+	var match parsed.Match
+	var league parsed.League
+	var sport parsed.Sport
+
+	err := p.db.QueryRowContext(p.ctx, query, matchID).Scan(
+		&match.ID, &match.BestOfX, &match.IsLive, &match.StartTime, &match.ParentId,
+		&league.ID, &league.Name, &league.Group, &league.IsHidden, &league.IsPromoted, &league.IsSticky, &league.Sequence,
+		&sport.ID, &sport.Name,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // Match not found, return nil without error
+		}
+		return nil, err
+	}
+
+	// Build the complete structure
+	league.Sport = &sport
+	match.League = &league
+
+	// Fetch participants
+	participantsQuery := `
+		SELECT mp.team_id, mp.alignment, t.name
+		FROM match_participants mp
+		JOIN teams t ON mp.team_id = t.id
+		WHERE mp.match_id = $1
+	`
+
+	rows, err := p.db.QueryContext(p.ctx, participantsQuery, matchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	participants := make([]*parsed.Participant, 0)
+	for rows.Next() {
+		var participant parsed.Participant
+		var teamID int
+
+		if err := rows.Scan(&teamID, &participant.Alignment, &participant.Name); err != nil {
+			return nil, err
+		}
+
+		participant.Id = teamID
+		participants = append(participants, &participant)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	match.Participants = participants
+
+	return &match, nil
+}
+
 // StoreMatch сохраняет матч в базе данных
-func (p *PostgresDBClient) StoreMatch(match *parsed.Match) error {
+func (p *PostgresDBClient) StoreMatch(patch *parsed.Match) error {
+	if patch == nil {
+		return errors.New("match patch is nil")
+	}
+
+	// Check if match exists
+	var exists bool
+	err := p.db.QueryRowContext(p.ctx, "SELECT EXISTS(SELECT 1 FROM matches WHERE id = $1)", patch.ID).Scan(&exists)
+	if err != nil {
+		return err
+	}
+
+	if exists {
+		// For existing matches, apply RFC7396 merge patch
+		existing, err := p.GetMatchByID(patch.ID)
+		if err != nil {
+			p.logger.Error("Failed to get existing match for patching", patch.ID, err)
+			return err
+		}
+
+		if existing == nil {
+			p.logger.Warn("Match exists in database but GetMatchByID returned nil", patch.ID)
+			// Fallback to treating it as a new match
+			return p.storeCompleteMatch(patch)
+		}
+
+		// Apply merge patch
+		merged, err := jsonpatch.ApplyMergePatch(existing, patch)
+		if err != nil {
+			p.logger.Error("Failed to apply patch to match", patch.ID, err)
+			return err
+		}
+
+		// Convert to Match type
+		mergedMatch, ok := merged.(*parsed.Match)
+		if !ok {
+			return errors.New("merge result is not a Match")
+		}
+
+		// Continue with storage using the merged object
+		return p.storeCompleteMatch(mergedMatch)
+	} else {
+		// For new matches, require complete data
+		if patch.League == nil {
+			return errors.New("match.League is nil")
+		}
+
+		if patch.League.Sport == nil {
+			return errors.New("match.League.Sport is nil")
+		}
+
+		// Store as a new match
+		return p.storeCompleteMatch(patch)
+	}
+}
+
+// storeCompleteMatch handles the actual storage of a complete match
+func (p *PostgresDBClient) storeCompleteMatch(match *parsed.Match) error {
 	if match == nil {
 		return errors.New("match is nil")
 	}

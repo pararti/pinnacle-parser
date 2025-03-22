@@ -106,7 +106,7 @@ services:
       dockerfile: Dockerfile
     container_name: parser
     depends_on:
-      kafka:
+      kafka-ui:
         condition: service_healthy
     volumes:
       - ./config:/config
@@ -117,9 +117,9 @@ services:
       dockerfile: Dockerfile.consumer
     container_name: consumer
     depends_on:
-      kafka:
+      kafka-ui:
         condition: service_healthy
-      postgres:
+      pgadmin:
         condition: service_healthy
     volumes:
       - ./config:/config

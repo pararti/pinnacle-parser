@@ -123,9 +123,10 @@ func (ck *ConsumerKafka) processMessage(data []byte) {
 		ck.logger.Info("Processing match updates", len(matchUpdData.Data))
 		successCount := 0
 		errorCount := 0
-		for _, match := range matchUpdData.Data {
-			if err := ck.postgresDB.StoreMatch(match); err != nil {
-				ck.logger.Error("Failed to update match", match.ID, err)
+		for _, patch := range matchUpdData.Data {
+			// StoreMatch now handles RFC7396 patching internally
+			if err := ck.postgresDB.StoreMatch(patch); err != nil {
+				ck.logger.Error("Failed to apply match patch", patch.ID, err)
 				errorCount++
 			} else {
 				successCount++

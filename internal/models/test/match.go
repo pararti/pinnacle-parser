@@ -153,14 +153,21 @@ func GenerateRandomMatchDelta(match *parsed.Match) *parsed.Match {
 	}
 
 	// League changes (25% chance for any league change)
-	if rand.Float32() < 0.25 && match.League != nil {
+	if rand.Float32() < 0.25 && match.League != nil && match.League.Sport != nil {
+		// Always include Sport to maintain RFC7396 object hierarchy
+		sportObj := &parsed.Sport{
+			ID:   match.League.Sport.ID,
+			Name: match.League.Sport.Name,
+		}
+
 		delta.League = &parsed.League{
-			ID: match.League.ID,
+			ID:    match.League.ID,
+			Sport: sportObj,
 		}
 		delta.MarkChanged("league")
 
 		// Name change (15% chance)
-		if rand.Float32() < 0.15 && match.League.Sport != nil {
+		if rand.Float32() < 0.15 {
 			delta.League.Name = match.League.Sport.Name + " League " + string(rune('A'+rand.Intn(3)))
 			delta.League.MarkChanged("name")
 		}
@@ -187,7 +194,11 @@ func GenerateRandomMatchDelta(match *parsed.Match) *parsed.Match {
 				continue
 			}
 
-			delta.Participants[i] = &parsed.Participant{}
+			// Create RFC7396-compliant participant patch with ID
+			delta.Participants[i] = &parsed.Participant{
+				Id: match.Participants[i].Id,
+			}
+
 			// 20% chance to change team name
 			if rand.Float32() < 0.2 {
 				newTeam := exampleTeams[rand.Intn(len(exampleTeams))]
