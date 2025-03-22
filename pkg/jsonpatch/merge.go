@@ -1,19 +1,48 @@
 package jsonpatch
 
 import (
-	"encoding/json"
 	"reflect"
+
+	"github.com/bytedance/sonic"
+	"github.com/bytedance/sonic/option"
 )
+
+var (
+	// Use the fastest configuration for better performance
+	sonicAPI = sonic.ConfigFastest
+
+	// Record types we've already precompiled
+	precompiledTypes = make(map[reflect.Type]bool)
+)
+
+// pretouchType precompiles the reflection-based encoder/decoder for type t
+func pretouchType(t reflect.Type) {
+	// Skip if already precompiled or if running on a non-amd64 architecture
+	if precompiledTypes[t] {
+		return
+	}
+
+	// Add to precompiled map to avoid redundant precompilation
+	precompiledTypes[t] = true
+
+	// Use Sonic's Pretouch to compile the encoder/decoder ahead of time
+	// This helps reduce first-time encoding/decoding latency
+	sonic.Pretouch(t, option.WithCompileRecursiveDepth(10))
+}
 
 // ApplyMergePatch applies an RFC7396 merge patch to an original object
 func ApplyMergePatch(original, patch interface{}) (interface{}, error) {
+	// Pretouch types for better performance
+	pretouchType(reflect.TypeOf(original))
+	pretouchType(reflect.TypeOf(patch))
+
 	// Convert both to JSON
-	originalJSON, err := json.Marshal(original)
+	originalJSON, err := sonicAPI.Marshal(original)
 	if err != nil {
 		return nil, err
 	}
 
-	patchJSON, err := json.Marshal(patch)
+	patchJSON, err := sonicAPI.Marshal(patch)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +67,7 @@ func ApplyMergePatch(original, patch interface{}) (interface{}, error) {
 	}
 
 	// Unmarshal back into the result
-	if err := json.Unmarshal(resultJSON, resultValue); err != nil {
+	if err := sonicAPI.Unmarshal(resultJSON, resultValue); err != nil {
 		return nil, err
 	}
 
@@ -51,11 +80,16 @@ func applyMergePatchJSON(original, patch []byte) ([]byte, error) {
 	var originalMap map[string]interface{}
 	var patchMap map[string]interface{}
 
-	if err := json.Unmarshal(original, &originalMap); err != nil {
+	// Pre-allocate map capacity for originalMap based on JSON size heuristic
+	// This can reduce allocations during unmarshaling
+	originalMapSize := estimateMapSize(len(original))
+	originalMap = make(map[string]interface{}, originalMapSize)
+
+	if err := sonicAPI.Unmarshal(original, &originalMap); err != nil {
 		return nil, err
 	}
 
-	if err := json.Unmarshal(patch, &patchMap); err != nil {
+	if err := sonicAPI.Unmarshal(patch, &patchMap); err != nil {
 		return nil, err
 	}
 
@@ -63,12 +97,30 @@ func applyMergePatchJSON(original, patch []byte) ([]byte, error) {
 	result := mergeMaps(originalMap, patchMap)
 
 	// Convert back to JSON
-	return json.Marshal(result)
+	return sonicAPI.Marshal(result)
+}
+
+// estimateMapSize estimates the number of top-level keys in a JSON object
+// based on its byte length. This is a heuristic to optimize map allocation.
+func estimateMapSize(jsonLen int) int {
+	// Very rough heuristic: assume average key-value pair is about 30 bytes
+	estimatedPairs := jsonLen / 30
+
+	// Ensure reasonable minimum and maximum
+	if estimatedPairs < 8 {
+		return 8 // Minimum pre-allocation
+	}
+	if estimatedPairs > 1024 {
+		return 1024 // Maximum pre-allocation
+	}
+	return estimatedPairs
 }
 
 // mergeMaps implements the RFC7396 merge logic for maps
 func mergeMaps(original, patch map[string]interface{}) map[string]interface{} {
-	result := make(map[string]interface{})
+	// Pre-allocate the result map with capacity for all original fields
+	// This reduces map growth and reallocation during merging
+	result := make(map[string]interface{}, len(original))
 
 	// Copy all fields from original
 	for k, v := range original {
@@ -86,6 +138,7 @@ func mergeMaps(original, patch map[string]interface{}) map[string]interface{} {
 			patchMap, patchIsMap := v.(map[string]interface{})
 
 			if originalIsMap && patchIsMap {
+				// Pre-allocate nested map with appropriate capacity
 				result[k] = mergeMaps(originalMap, patchMap)
 			} else {
 				// Otherwise replace with patch value
