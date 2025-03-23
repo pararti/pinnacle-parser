@@ -56,7 +56,17 @@ func (e *Engine) Start(appOpts *options.Options) {
 		//chromedp.Flag("headless", false),
 	)
 
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
+	var allocCtx context.Context
+	var cancelAlloc context.CancelFunc
+
+	if appOpts.RemoteChromeURL != "" {
+		// Connect to remote Chrome instance
+		e.logger.Info("Подключение к удаленному Chrome по адресу %s", appOpts.RemoteChromeURL)
+		allocCtx, cancelAlloc = chromedp.NewRemoteAllocator(context.Background(), appOpts.RemoteChromeURL, chromedp.NoModifyURL)
+	} else {
+		// Use local Chrome instance
+		allocCtx, cancelAlloc = chromedp.NewExecAllocator(context.Background(), opts...)
+	}
 	defer cancelAlloc()
 
 	ctx, cancel := chromedp.NewContext(allocCtx)

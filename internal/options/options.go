@@ -12,19 +12,20 @@ import (
 const site = "https://www.pinnacle.com"
 
 type Options struct {
-	CookieDir      string `yaml:"cookieDir,omitempty"`
-	Site           string `yaml:"site,omitempty"`
-	UserAgent      string `yaml:"userAgent,omitempty"`
-	LogPath        string `yaml:"logPath,omitempty"`
-	TestMode       bool   `yaml:"testMode,omitempty"`
-	KafkaAddress   string `yaml:"kafkaAddress,omitempty"`
-	KafkaPort      string `yaml:"kafkaPort,omitempty"`
-	KafkaTopic     string `yaml:"kafkaTopic,omitempty"`
-	Login          string `yaml:"login,omitempty"`
-	Password       string `yaml:"password,omitempty"`
-	DbConnection   string `yaml:"dbConnection,omitempty"`
-	ProducerSentry string `yaml:"producerSentry,omitempty"`
-	ConsumerSentry string `yaml:"consumerSentry,omitempty"`
+	CookieDir       string `yaml:"cookieDir,omitempty"`
+	Site            string `yaml:"site,omitempty"`
+	UserAgent       string `yaml:"userAgent,omitempty"`
+	LogPath         string `yaml:"logPath,omitempty"`
+	TestMode        bool   `yaml:"testMode,omitempty"`
+	KafkaAddress    string `yaml:"kafkaAddress,omitempty"`
+	KafkaPort       string `yaml:"kafkaPort,omitempty"`
+	KafkaTopic      string `yaml:"kafkaTopic,omitempty"`
+	Login           string `yaml:"login,omitempty"`
+	Password        string `yaml:"password,omitempty"`
+	DbConnection    string `yaml:"dbConnection,omitempty"`
+	ProducerSentry  string `yaml:"producerSentry,omitempty"`
+	ConsumerSentry  string `yaml:"consumerSentry,omitempty"`
+	RemoteChromeURL string `yaml:"remoteChromeURL,omitempty"`
 }
 
 func NewOptions() (*Options, error) {
